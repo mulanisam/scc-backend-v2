@@ -33,7 +33,7 @@ public interface SaleRepository extends JpaRepository<Sale, Long>{
                 "s.birds AS BIRDS, s.kilograms AS 'WEIGHT', s.rate AS RATE, s.amount AS 'AMOUNT', " +
                 "s.payment AS 'PAYMENT RECEIVED', s.pending AS 'PAYMENT PENDING', " +
                 "s.balance_pending AS 'BALANCE PENDING', s.description AS 'DESCRIPTION' " +
-                "FROM poultry_db_test.sale s " +
+                "FROM sale s " +
                 "INNER JOIN vehicle v ON s.vehicle_no = v.id " +
                 "INNER JOIN driver d ON s.driver_id = d.id " +
                 "INNER JOIN customer c ON s.customer_id = c.id " +
@@ -50,7 +50,7 @@ public interface SaleRepository extends JpaRepository<Sale, Long>{
                 "s.birds AS BIRDS, s.kilograms AS 'WEIGHT', s.rate AS RATE, s.amount AS 'AMOUNT', " +
                 "s.payment AS 'PAYMENT RECEIVED', s.pending AS 'PAYMENT PENDING', " +
                 "c.balance_amount AS 'TOTAL BALANCE', s.description AS 'DESCRIPTION' " +
-                "FROM poultry_db_test.sale s " +
+                "FROM sale s " +
                 "INNER JOIN vehicle v ON s.vehicle_no = v.id " +
                 "INNER JOIN driver d ON s.driver_id = d.id " +
                 "INNER JOIN customer c ON s.customer_id = c.id " +
@@ -66,7 +66,7 @@ public interface SaleRepository extends JpaRepository<Sale, Long>{
                 "s.birds AS BIRDS, s.kilograms AS 'WEIGHT', s.rate AS RATE, s.amount AS 'AMOUNT', " +
                 "s.payment AS 'PAYMENT RECEIVED', s.pending AS 'PAYMENT PENDING', " +
                 "c.balance_amount AS 'TOTAL BALANCE', s.description AS 'DESCRIPTION' " +
-                "FROM poultry_db_test.sale s " +
+                "FROM sale s " +
                 "INNER JOIN vehicle v ON s.vehicle_no = v.id " +
                 "INNER JOIN driver d ON s.driver_id = d.id " +
                 "INNER JOIN customer c ON s.customer_id = c.id " +

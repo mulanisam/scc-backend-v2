@@ -217,7 +217,6 @@ public class SalesServiceImpl implements SalesService {
             sale.setDescription(saleDTO.getDescription());
             sale.setObsolete(false);
             sale.setSmsSent(false);
-            saleDTO.setSendWAmsg(true);
             // Calculate balance pending (previous balance + current pending)
             Sale previousSale = saleRepository.findTopByCustomerIdOrderByIdDesc(customer.getId());
             Integer previousBalancePending = (previousSale != null && previousSale.getBalancePending() != null) 
