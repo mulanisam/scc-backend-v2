@@ -2,6 +2,7 @@ package com.app.entity;
 
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
@@ -33,6 +34,29 @@ public class Customer {
     // Credit limit management (optional)
     private boolean creditLimitEnabled = false;
     private BigDecimal creditLimit;
+
+    /*
+     * WhatsApp consent.
+     *
+     * Separate from having a mobile number, because they answer different
+     * questions: whether we can reach this customer, and whether they have agreed
+     * to be reached this way. A ledger statement carries a balance, so a customer
+     * who has not opted in does not get one - existing customers start opted out,
+     * since nobody has agreed to anything yet.
+     *
+     * whatsappOptOut is checked before every send and is never cleared
+     * automatically; a customer who asked to stop has to ask to resume.
+     */
+    private LocalDateTime whatsappOptInAt;
+    private boolean whatsappOptOut = false;
+    private LocalDateTime whatsappOptOutAt;
+    /** Why messaging is off for this customer, when it is. */
+    private String messagingNotes;
+
+    /** Opted in, not opted out. The one question the send path asks. */
+    public boolean isWhatsappAllowed() {
+        return whatsappOptInAt != null && !whatsappOptOut;
+    }
    
     
 //    @ManyToOne

@@ -2,6 +2,7 @@ package com.app.service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,8 @@ import com.app.dto.SalesBulkEntryDto;
 import com.app.dto.TripContextDTO;
 import com.app.dto.SingleSaleEntryDTO;
 import com.app.entity.Customer;
+import com.app.entity.MessageOutbox.Channel;
+import com.app.entity.MessageOutbox.MessageType;
 import com.app.entity.Driver;
 import com.app.entity.Route;
 import com.app.entity.Sale;
@@ -53,7 +56,7 @@ public class SalesServiceImpl implements SalesService {
     private SaleDetailsRepository saleDetailsRepository;
     
     @Autowired
-    private SendSmsService sendSmsService;
+    private MessagingService messagingService;
     
     @Autowired
     private LedgerService ledgerService;
@@ -174,6 +177,71 @@ public class SalesServiceImpl implements SalesService {
         }
     }
 
+    /**
+     * Queues one message per customer for the day's trading.
+     *
+     * Per customer, not per sale row. The old code sent from inside the save loop,
+     * once per row, so a customer with two lines on one trip got two messages -
+     * which happens on 175 trips in this data - and each quoted the running balance
+     * as it stood after that line, so the first was already out of date when the
+     * second arrived. Summing the day's lines and quoting the closing balance is
+     * both cheaper and correct.
+     *
+     * Nothing here calls the provider. MessagingService writes a row and returns, so
+     * the sale is not waiting on an HTTP request and cannot be rolled back by a
+     * messaging failure; the dispatcher picks the queue up afterwards.
+     */
+    private void queueDailyMessages(List<Sale> sales, LocalDate date) {
+        Map<Long, List<Sale>> byCustomer = new LinkedHashMap<>();
+        for (Sale sale : sales) {
+            byCustomer.computeIfAbsent(sale.getCustomer().getId(), key -> new ArrayList<>()).add(sale);
+        }
+
+        for (Map.Entry<Long, List<Sale>> entry : byCustomer.entrySet()) {
+            try {
+                Customer customer = customerRepository.findById(entry.getKey()).orElse(null);
+                if (customer == null) {
+                    continue;
+                }
+
+                long birds = 0;
+                BigDecimal kilograms = BigDecimal.ZERO;
+                BigDecimal amount = BigDecimal.ZERO;
+                BigDecimal paid = BigDecimal.ZERO;
+                for (Sale sale : entry.getValue()) {
+                    birds += sale.getBirds() == null ? 0 : sale.getBirds();
+                    kilograms = kilograms.add(MoneyRules.weight(sale.getKilograms()));
+                    amount = amount.add(MoneyRules.money(sale.getAmount()));
+                    paid = paid.add(MoneyRules.money(sale.getPayment()));
+                }
+
+                // The ledger's figure, which createSaleLedgerEntry has just written.
+                BigDecimal balance = MoneyRules.money(customer.getBalanceAmount());
+
+                // The message has to match the channel's approved template. The DLT
+                // template used for SMS takes three variables - name, date, balance -
+                // so the detailed seven-variable summary can only go over WhatsApp,
+                // and only once its own template is approved. Sending the wrong count
+                // is rejected by the provider.
+                SmsMessageBuilder.Message message = messagingService.currentChannel() == Channel.WHATSAPP
+                        ? SmsMessageBuilder.dailySaleSummary(
+                                customer.getName(), date, birds, kilograms, amount, paid, balance)
+                        : SmsMessageBuilder.dailyBalance(customer.getName(), date, balance);
+
+                messagingService.enqueue(customer, MessageType.DAILY_SALE_SUMMARY, date,
+                        null, message.variables(), message.body());
+
+                entry.getValue().forEach(sale -> sale.setSmsSent(true));
+
+            } catch (Exception ex) {
+                // A message that cannot be queued must never fail the sale. The
+                // outbox is the record, so a gap in it is visible afterwards.
+                logger.error("Could not queue the daily message for customer {}: {}",
+                        entry.getKey(), ex.getMessage());
+            }
+        }
+    }
+
     @Transactional
     @Override
     public List<Sale> salesBulkEntry(SalesBulkEntryDto salesBulkEntryDto) {
@@ -238,30 +306,11 @@ public class SalesServiceImpl implements SalesService {
                 logger.debug("Ledger entry created for sale ID: {}", savedSale.getId());
             }
 
-             if(salesBulkEntryDto.isSendSms()) {
-             for (Sale sale : savedSales) {
-                try {
-                	Optional<Customer> customer = customerRepository.findById(sale.getCustomer().getId());
-                     String customerName = customer.get().getName();
-                     String phone = customer.get().getMobileNo();
-                     double amount = MoneyRules.money(customer.get().getBalanceAmount()).doubleValue();
-                     String message = SmsMessageBuilder.buildMarathiSms(customerName, amount);
+            if (salesBulkEntryDto.isSendSms()) {
+                queueDailyMessages(savedSales, salesBulkEntryDto.getDate());
+            }
 
-                    // String message = String.format("Hello %s, your sale of ₹%.2f has been recorded. Thank you!", customerName, amount);
-
-                     if (phone != null && !phone.trim().isEmpty()) {
-                         sendSmsService.sendSms(customerName, phone,amount,salesBulkEntryDto.getDate());
-                        logger.info("📲 SMS trigger sent for customer {} ({})", customerName, phone);
-                         sale.setSmsSent(true);
-                     } else {
-                        logger.warn("⚠️ Customer {} has no phone number, SMS not sent.", customerName);
-                     }
-                 } catch (Exception ex) {
-                     logger.error("❌ Failed to trigger SMS for sale ID {}: {}", sale.getId(), ex.getMessage());
-               }
-             }
-             }
-             saleRepository.saveAll(savedSales);
+            saleRepository.saveAll(savedSales);
             logger.info("Bulk sales entry created successfully with {} records", savedSales.size());
             return savedSales;
         } catch (IllegalArgumentException | IllegalStateException | ResourceNotFoundException e) {
@@ -343,32 +392,12 @@ public class SalesServiceImpl implements SalesService {
             logger.info("Ledger entry created for sale ID: {}", savedSale.getId());
             
             
-            if(saleDTO.isSendWAmsg()) {
-            
-                   try {
-                   	Optional<Customer> cust = customerRepository.findById(sale.getCustomer().getId());
-                        String customerName = cust.get().getName();
-                        String phone = cust.get().getMobileNo();
-                        double amount = MoneyRules.money(cust.get().getBalanceAmount()).doubleValue();
-                        String message = SmsMessageBuilder.buildMarathiSms(customerName, amount);
+            // Same path as bulk entry: one message per customer for the day, queued
+            // rather than sent, so the outbox is the record either way.
+            if (saleDTO.isSendWAmsg()) {
+                queueDailyMessages(List.of(savedSale), saleDTO.getDate());
+            }
 
-                       // String message = String.format("Hello %s, your sale of ₹%.2f has been recorded. Thank you!", customerName, amount);
-
-                        if (phone != null && !phone.trim().isEmpty()) {
-                            sendSmsService.sendWAmsg(customerName, phone,amount,saleDTO.getDate());
-                           logger.info("📲 Whatsapp message sent for customer {} ({})", customerName, phone);
-                            sale.setSmsSent(true);
-                        } else {
-                           logger.warn("⚠️ Customer {} has no phone number, Whatsapp message not sent.", customerName);
-                        }
-                    } catch (Exception ex) {
-                        logger.error("❌ Failed to trigger Whatsapp message for sale ID {}: {}", sale.getId(), ex.getMessage());
-                  }
-                
-                }
-            
-            
-            
             return savedSale;
             
         } catch (IllegalArgumentException | ResourceNotFoundException e) {

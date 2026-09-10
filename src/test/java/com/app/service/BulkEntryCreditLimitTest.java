@@ -54,7 +54,7 @@ class BulkEntryCreditLimitTest {
     @Mock private SaleRepository saleRepository;
     @Mock private CustomerRepository customerRepository;
     @Mock private SaleDetailsRepository saleDetailsRepository;
-    @Mock private SendSmsService sendSmsService;
+    @Mock private MessagingService messagingService;
     @Mock private LedgerService ledgerService;
     @Mock private RouteRepository routeRepository;
     @Mock private VehicleRepository vehicleRepository;
