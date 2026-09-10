@@ -1,5 +1,6 @@
 package com.app.entity;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -51,8 +52,8 @@ public class SaleDetails {
     private Integer returnToFarm;
     private String description;
     private Integer totalBirdSale;
-    private Integer totalKilogramSale;
-    private Integer totalAmount;
-    private Integer totalPaymentReceived;
-    private Integer totalPending;
+    private BigDecimal totalKilogramSale;
+    private BigDecimal totalAmount;
+    private BigDecimal totalPaymentReceived;
+    private BigDecimal totalPending;
 }

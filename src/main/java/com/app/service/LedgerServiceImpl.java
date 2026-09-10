@@ -1,5 +1,6 @@
 package com.app.service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -21,6 +22,7 @@ import com.app.entity.CustomerPayment;
 import com.app.entity.Sale;
 import com.app.repository.CustomerLedgerRepository;
 import com.app.repository.CustomerRepository;
+import com.app.utility.MoneyRules;
 
 @Service
 public class LedgerServiceImpl implements LedgerService {
@@ -47,11 +49,11 @@ public class LedgerServiceImpl implements LedgerService {
         ledger.setReferenceId(sale.getId());
         
         // Debit = Sale amount (increases customer's debt)
-        Double saleAmount = sale.getAmount() != null ? sale.getAmount().doubleValue() : 0.0;
+        BigDecimal saleAmount = MoneyRules.money(sale.getAmount());
         ledger.setDebitAmount(saleAmount);
         
         // Credit = Payment received (decreases debt)
-        Double paymentAmount = sale.getPayment() != null ? sale.getPayment().doubleValue() : 0.0;
+        BigDecimal paymentAmount = MoneyRules.money(sale.getPayment());
         ledger.setCreditAmount(paymentAmount);
         
         ledger.setPaymentMode(sale.getPaymentMode());
@@ -65,8 +67,8 @@ public class LedgerServiceImpl implements LedgerService {
         }
         
         // Calculate running balance
-        Double previousBalance = getCurrentBalance(customer);
-        Double runningBalance = previousBalance + saleAmount - paymentAmount;
+        BigDecimal previousBalance = getCurrentBalance(customer);
+        BigDecimal runningBalance = MoneyRules.money(previousBalance.add(saleAmount).subtract(paymentAmount));
         ledger.setRunningBalance(runningBalance);
         
         CustomerLedger savedLedger = ledgerRepository.save(ledger);
@@ -96,8 +98,8 @@ public class LedgerServiceImpl implements LedgerService {
         ledger.setTransactionType(TransactionType.PAYMENT);
         ledger.setReferenceType("PAYMENT");
         ledger.setReferenceId(payment.getId());
-        ledger.setDebitAmount(0.0);
-        ledger.setCreditAmount(payment.getAmount());
+        ledger.setDebitAmount(MoneyRules.money(BigDecimal.ZERO));
+        ledger.setCreditAmount(MoneyRules.money(payment.getAmount()));
         ledger.setPaymentMode(payment.getPaymentMode());
         ledger.setDescription("Payment received - " + payment.getPaymentMode() + 
                              (payment.getTransactionReference() != null ? " (" + payment.getTransactionReference() + ")" : ""));
@@ -109,8 +111,8 @@ public class LedgerServiceImpl implements LedgerService {
         }
         
         // Calculate running balance
-        Double previousBalance = getCurrentBalance(customer);
-        Double runningBalance = previousBalance - payment.getAmount();
+        BigDecimal previousBalance = getCurrentBalance(customer);
+        BigDecimal runningBalance = MoneyRules.money(previousBalance.subtract(MoneyRules.money(payment.getAmount())));
         ledger.setRunningBalance(runningBalance);
         
         CustomerLedger savedLedger = ledgerRepository.save(ledger);
@@ -130,7 +132,7 @@ public class LedgerServiceImpl implements LedgerService {
 
     @Override
     @Transactional
-    public CustomerLedger createOpeningBalanceEntry(Customer customer, Double openingBalance, LocalDate asOfDate) {
+    public CustomerLedger createOpeningBalanceEntry(Customer customer, BigDecimal openingBalance, LocalDate asOfDate) {
         logger.info("Creating opening balance entry for customer: {}, balance: {}", customer.getId(), openingBalance);
         
         CustomerLedger ledger = new CustomerLedger();
@@ -139,9 +141,9 @@ public class LedgerServiceImpl implements LedgerService {
         ledger.setTransactionType(TransactionType.OPENING_BALANCE);
         ledger.setReferenceType("OPENING_BALANCE");
         ledger.setReferenceId(null);
-        ledger.setDebitAmount(openingBalance > 0 ? openingBalance : 0.0);
-        ledger.setCreditAmount(openingBalance < 0 ? Math.abs(openingBalance) : 0.0);
-        ledger.setRunningBalance(openingBalance);
+        ledger.setDebitAmount(openingBalance.signum() > 0 ? MoneyRules.money(openingBalance) : MoneyRules.money(BigDecimal.ZERO));
+        ledger.setCreditAmount(openingBalance.signum() < 0 ? MoneyRules.money(openingBalance.abs()) : MoneyRules.money(BigDecimal.ZERO));
+        ledger.setRunningBalance(MoneyRules.money(openingBalance));
         ledger.setDescription("Opening Balance");
         ledger.setBackdated(false);
         
@@ -170,10 +172,10 @@ public class LedgerServiceImpl implements LedgerService {
     }
 
     @Override
-    public Double getCurrentBalance(Customer customer) {
+    public BigDecimal getCurrentBalance(Customer customer) {
         List<CustomerLedger> latestEntry = ledgerRepository.findLatestByCustomer(customer);
         if (latestEntry.isEmpty()) {
-            return 0.0;
+            return MoneyRules.money(BigDecimal.ZERO);
         }
         return latestEntry.get(0).getRunningBalance();
     }
@@ -188,7 +190,7 @@ public class LedgerServiceImpl implements LedgerService {
                 .findByCustomerAndTransactionDateBetweenOrderByTransactionDateAsc(
                         customer, LocalDate.of(1900, 1, 1), fromDate.minusDays(1));
         
-        Double startingBalance = 0.0;
+        BigDecimal startingBalance = MoneyRules.money(BigDecimal.ZERO);
         if (!entriesBeforeDate.isEmpty()) {
             startingBalance = entriesBeforeDate.get(entriesBeforeDate.size() - 1).getRunningBalance();
         }
@@ -202,11 +204,11 @@ public class LedgerServiceImpl implements LedgerService {
                 .comparing(CustomerLedger::getTransactionDate)
                 .thenComparing(CustomerLedger::getId));
         
-        Double runningBalance = startingBalance;
+        BigDecimal runningBalance = startingBalance;
         
         // Recalculate running balance for each entry
         for (CustomerLedger entry : entriesToRecalculate) {
-            runningBalance = runningBalance + entry.getDebitAmount() - entry.getCreditAmount();
+            runningBalance = MoneyRules.money(runningBalance.add(MoneyRules.money(entry.getDebitAmount())).subtract(MoneyRules.money(entry.getCreditAmount())));
             entry.setRunningBalance(runningBalance);
             entry.setUpdatedAt(LocalDateTime.now());
         }
@@ -233,10 +235,10 @@ public class LedgerServiceImpl implements LedgerService {
                 .comparing(CustomerLedger::getTransactionDate)
                 .thenComparing(CustomerLedger::getId));
         
-        Double runningBalance = 0.0;
+        BigDecimal runningBalance = MoneyRules.money(BigDecimal.ZERO);
         
         for (CustomerLedger entry : allEntries) {
-            runningBalance = runningBalance + entry.getDebitAmount() - entry.getCreditAmount();
+            runningBalance = MoneyRules.money(runningBalance.add(MoneyRules.money(entry.getDebitAmount())).subtract(MoneyRules.money(entry.getCreditAmount())));
             entry.setRunningBalance(runningBalance);
             entry.setUpdatedAt(LocalDateTime.now());
         }
@@ -251,21 +253,21 @@ public class LedgerServiceImpl implements LedgerService {
     }
 
     @Override
-    public boolean isCreditLimitExceeded(Customer customer, Double additionalAmount) {
+    public boolean isCreditLimitExceeded(Customer customer, BigDecimal additionalAmount) {
         if (!customer.isCreditLimitEnabled() || customer.getCreditLimit() == null) {
             return false; // No credit limit
         }
         
-        Double currentBalance = getCurrentBalance(customer);
-        Double newBalance = currentBalance + additionalAmount;
+        BigDecimal currentBalance = getCurrentBalance(customer);
+        BigDecimal newBalance = MoneyRules.money(currentBalance.add(MoneyRules.money(additionalAmount)));
         
-        return newBalance > customer.getCreditLimit();
+        return newBalance.compareTo(customer.getCreditLimit()) > 0;
     }
 
     @Override
     @Transactional
     public void updateCustomerBalance(Customer customer) {
-        Double currentBalance = getCurrentBalance(customer);
+        BigDecimal currentBalance = getCurrentBalance(customer);
         customer.setBalanceAmount(currentBalance);
         customerRepository.save(customer);
     }

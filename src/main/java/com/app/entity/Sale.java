@@ -1,5 +1,6 @@
 package com.app.entity;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 import com.fasterxml.jackson.annotation.JsonBackReference;
@@ -24,13 +25,13 @@ public class Sale {
     private Long id;
     private LocalDate date;
     private Long vehicleNo;
-    private Double kilograms;
-    private Double rate;
+    private BigDecimal kilograms;
+    private BigDecimal rate;
     private Integer birds;
-    private Integer amount;
-    private Integer payment;
-    private Integer pending;
-    private Integer balancePending;
+    private BigDecimal amount;
+    private BigDecimal payment;
+    private BigDecimal pending;
+    private BigDecimal balancePending;
     private String paymentMode;
     private String description;
     private boolean obsolete;

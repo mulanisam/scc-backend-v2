@@ -1,5 +1,6 @@
 package com.app.dto;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
@@ -20,9 +21,9 @@ public class CustomerLedgerDTO {
     private TransactionType transactionType;
     private String referenceType;
     private Long referenceId;
-    private Double debitAmount;
-    private Double creditAmount;
-    private Double runningBalance;
+    private BigDecimal debitAmount;
+    private BigDecimal creditAmount;
+    private BigDecimal runningBalance;
     private String description;
     private String paymentMode;
     private LocalDateTime createdAt;

@@ -1,5 +1,6 @@
 package com.app.dto;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -26,10 +27,10 @@ public class SalesBulkEntryDto {
     private Integer returnToFarm;
     private String description;
     private Integer totalBirdSale;
-    private Integer totalKilogramSale;
-    private Integer totalAmount;
-    private Integer totalPaymentReceived;
-    private Integer totalPending;
+    private BigDecimal totalKilogramSale;
+    private BigDecimal totalAmount;
+    private BigDecimal totalPaymentReceived;
+    private BigDecimal totalPending;
     private boolean sendSms;
     
 }

@@ -1,5 +1,6 @@
 package com.app.dto;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 import lombok.AllArgsConstructor;
@@ -15,11 +16,11 @@ public class SingleSaleEntryDTO {
     private Long routeId;
     private Long vehicleId;
     private Long driverId;
-    private Double kilograms;
-    private Double rate;
+    private BigDecimal kilograms;
+    private BigDecimal rate;
     private Integer birds;
-    private Integer amount;
-    private Integer payment; // Payment received at time of sale
+    private BigDecimal amount;
+    private BigDecimal payment; // Payment received at time of sale
     private String paymentMode;
     private String description;
     private boolean sendWAmsg;

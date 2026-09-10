@@ -1,5 +1,6 @@
 package com.app.service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.app.dto.CustomerPaymentDTO;
+import com.app.utility.MoneyRules;
 import com.app.entity.Customer;
 import com.app.entity.CustomerPayment;
 import com.app.repository.CustomerPaymentRepository;
@@ -42,13 +44,13 @@ public class PaymentServiceImpl implements PaymentService {
                     .orElseThrow(() -> new ResourceNotFoundException("Customer not found with id: " + paymentDTO.getCustomerId()));
             
             // Validate payment amount
-            if (paymentDTO.getAmount() == null || paymentDTO.getAmount() <= 0) {
+            if (paymentDTO.getAmount() == null || paymentDTO.getAmount().signum() <= 0) {
                 throw new IllegalArgumentException("Payment amount must be greater than zero");
             }
             
             // Check if payment exceeds current balance
-            Double currentBalance = ledgerService.getCurrentBalance(customer);
-            if (paymentDTO.getAmount() > currentBalance) {
+            BigDecimal currentBalance = ledgerService.getCurrentBalance(customer);
+            if (paymentDTO.getAmount().compareTo(currentBalance) > 0) {
                 logger.warn("Payment amount {} exceeds current balance {} for customer {}", 
                         paymentDTO.getAmount(), currentBalance, customer.getName());
                 // Allow but log warning - business might want to accept advance payments
@@ -58,7 +60,7 @@ public class PaymentServiceImpl implements PaymentService {
             CustomerPayment payment = new CustomerPayment();
             payment.setCustomer(customer);
             payment.setPaymentDate(paymentDTO.getPaymentDate());
-            payment.setAmount(paymentDTO.getAmount());
+            payment.setAmount(MoneyRules.money(paymentDTO.getAmount()));
             payment.setPaymentMode(paymentDTO.getPaymentMode());
             payment.setTransactionReference(paymentDTO.getTransactionReference());
             payment.setRemarks(paymentDTO.getRemarks());

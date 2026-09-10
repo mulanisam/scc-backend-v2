@@ -1,5 +1,6 @@
 package com.app.entity;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
@@ -43,13 +44,13 @@ public class CustomerLedger {
     private Long referenceId; // Sale ID or Payment ID
     
     @Column(nullable = false)
-    private Double debitAmount; // Sale amount (increases balance)
+    private BigDecimal debitAmount;
     
     @Column(nullable = false)
-    private Double creditAmount; // Payment (decreases balance)
+    private BigDecimal creditAmount;
     
     @Column(nullable = false)
-    private Double runningBalance; // Balance after this transaction
+    private BigDecimal runningBalance;
     
     @Column(length = 500)
     private String description;

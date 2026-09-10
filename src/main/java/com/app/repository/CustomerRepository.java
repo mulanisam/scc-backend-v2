@@ -3,6 +3,8 @@ package com.app.repository;
 import java.util.List;
 import java.util.Optional;
 
+import java.math.BigDecimal;
+
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -19,7 +21,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
 	
 	@Modifying
     @Query("UPDATE Customer c SET c.balanceAmount = c.balanceAmount + :amount WHERE c.id = :customerId")
-    int updateBalanceAmount(@Param("customerId") Long customerId, @Param("amount") Integer amount);
+    int updateBalanceAmount(@Param("customerId") Long customerId, @Param("amount") BigDecimal amount);
 
 }
 

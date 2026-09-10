@@ -1,5 +1,6 @@
 package com.app.service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.app.dto.LedgerMigrationResponseDTO;
+import com.app.utility.MoneyRules;
 import com.app.entity.Customer;
 import com.app.entity.CustomerLedger;
 import com.app.entity.Sale;
@@ -66,7 +68,7 @@ public class LedgerMigrationService {
                     logger.info("Processing customer: {} (ID: {})", customer.getName(), customer.getId());
                     
                     // Create opening balance entry if customer has existing balance
-                    if (customer.getBalanceAmount() != 0) {
+                    if (MoneyRules.money(customer.getBalanceAmount()).signum() != 0) {
                         // We'll set opening balance as of oldest sale date or today
                         List<Sale> customerSales = saleRepository.findByCustomerOrderByDateAsc(customer);
                         LocalDate openingDate = customerSales.isEmpty() ? 
@@ -93,8 +95,8 @@ public class LedgerMigrationService {
                             ledgerEntry.setReferenceType("SALE");
                             ledgerEntry.setReferenceId(sale.getId());
                             
-                            Double saleAmount = sale.getAmount() != null ? sale.getAmount().doubleValue() : 0.0;
-                            Double paymentAmount = sale.getPayment() != null ? sale.getPayment().doubleValue() : 0.0;
+                            BigDecimal saleAmount = MoneyRules.money(sale.getAmount());
+                            BigDecimal paymentAmount = MoneyRules.money(sale.getPayment());
                             
                             ledgerEntry.setDebitAmount(saleAmount);
                             ledgerEntry.setCreditAmount(paymentAmount);
@@ -105,7 +107,7 @@ public class LedgerMigrationService {
                             ledgerEntry.setBackdated(false); // Historical data, not backdated
                             
                             // Running balance will be calculated during recalculation
-                            ledgerEntry.setRunningBalance(0.0);
+                            ledgerEntry.setRunningBalance(MoneyRules.money(BigDecimal.ZERO));
                             
                             ledgerRepository.save(ledgerEntry);
                             ledgerEntriesCreated++;

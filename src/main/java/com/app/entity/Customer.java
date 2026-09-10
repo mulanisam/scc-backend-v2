@@ -1,6 +1,8 @@
 package com.app.entity;
 
 
+import java.math.BigDecimal;
+
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import jakarta.persistence.Entity;
@@ -26,11 +28,11 @@ public class Customer {
     private String address;
     private String shopName;
     private boolean obsolete;
-    private double balanceAmount;
+    private BigDecimal balanceAmount;
     
     // Credit limit management (optional)
     private boolean creditLimitEnabled = false;
-    private Double creditLimit; // Nullable - only applies if creditLimitEnabled is true
+    private BigDecimal creditLimit;
    
     
 //    @ManyToOne

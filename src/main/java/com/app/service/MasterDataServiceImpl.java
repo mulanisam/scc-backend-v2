@@ -1,5 +1,6 @@
 package com.app.service;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -10,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.app.dto.CityDTO;
 import com.app.dto.CustomerDTO;
+import com.app.utility.MoneyRules;
 import com.app.entity.City;
 import com.app.entity.Customer;
 import com.app.entity.Driver;
@@ -70,7 +72,7 @@ public class MasterDataServiceImpl implements MasterDataService {
         customer.setAddress(customerDto.getAddress());
         customer.setMobileNo(customerDto.getMobileNo());
         customer.setShopName(customerDto.getShopName());
-        customer.setBalanceAmount(Double.parseDouble(customerDto.getBalanceAmount()));
+        customer.setBalanceAmount(MoneyRules.money(new BigDecimal(customerDto.getBalanceAmount())));
         customer.setObsolete(customerDto.isObsolete());
         City city = cityRepository.findById(customerDto.getCity())
                 .orElseThrow(() -> new RuntimeException("City not found"));
@@ -100,7 +102,7 @@ public class MasterDataServiceImpl implements MasterDataService {
         customer.setAddress(customerDto.getAddress());
         customer.setMobileNo(customerDto.getMobileNo());
         customer.setShopName(customerDto.getShopName());
-        customer.setBalanceAmount(Double.parseDouble(customerDto.getBalanceAmount()));
+        customer.setBalanceAmount(MoneyRules.money(new BigDecimal(customerDto.getBalanceAmount())));
         customer.setObsolete(customerDto.isObsolete());
         City city = cityRepository.findById(customerDto.getCity())
                 .orElseThrow(() -> new RuntimeException("City not found"));

@@ -47,15 +47,12 @@ public final class SaleMapper {
             Sale sale = new Sale();
             sale.setDate(date);
             sale.setVehicleNo(vehicleId);
-            sale.setKilograms(kilograms.doubleValue());
-            sale.setRate(rate.doubleValue());
+            sale.setKilograms(kilograms);
+            sale.setRate(rate);
             sale.setBirds(line.getBirds() == null ? 0 : line.getBirds());
-            // These columns are still integral rupees; the money migration
-            // widens them to DECIMAL, at which point the BigDecimal values
-            // above can be stored directly.
-            sale.setAmount(amount.setScale(0, java.math.RoundingMode.HALF_UP).intValueExact());
-            sale.setPayment(payment.setScale(0, java.math.RoundingMode.HALF_UP).intValueExact());
-            sale.setPending(pending.setScale(0, java.math.RoundingMode.HALF_UP).intValueExact());
+            sale.setAmount(amount);
+            sale.setPayment(payment);
+            sale.setPending(pending);
             sale.setPaymentMode(line.getPaymentMode());
             sale.setDescription(line.getDescription());
 

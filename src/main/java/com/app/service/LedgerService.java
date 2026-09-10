@@ -1,5 +1,6 @@
 package com.app.service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -24,7 +25,7 @@ public interface LedgerService {
     /**
      * Create opening balance ledger entry
      */
-    CustomerLedger createOpeningBalanceEntry(Customer customer, Double openingBalance, LocalDate asOfDate);
+    CustomerLedger createOpeningBalanceEntry(Customer customer, BigDecimal openingBalance, LocalDate asOfDate);
     
     /**
      * Get customer ledger entries with optional date range
@@ -34,7 +35,7 @@ public interface LedgerService {
     /**
      * Get current balance for a customer from ledger
      */
-    Double getCurrentBalance(Customer customer);
+    BigDecimal getCurrentBalance(Customer customer);
     
     /**
      * Recalculate running balances from a specific date onwards (for backdate handling)
@@ -50,7 +51,7 @@ public interface LedgerService {
     /**
      * Check if credit limit is exceeded (if enabled)
      */
-    boolean isCreditLimitExceeded(Customer customer, Double additionalAmount);
+    boolean isCreditLimitExceeded(Customer customer, BigDecimal additionalAmount);
     
     /**
      * Update customer balance amount field (sync with ledger)

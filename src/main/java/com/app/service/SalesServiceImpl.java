@@ -155,13 +155,13 @@ public class SalesServiceImpl implements SalesService {
             );
             for (Sale sale : bulkSalesEntries) {
 				Sale tempSale = saleRepository.findTopByCustomerIdOrderByIdDesc((Long)sale.getCustomer().getId());
-				Integer tempBalPending;
+				BigDecimal tempBalPending;
 				if(tempSale!=null)
-					tempBalPending= tempSale.getBalancePending() == null ? 0 :tempSale.getBalancePending();
+					tempBalPending= MoneyRules.money(tempSale.getBalancePending());
 				else
-					tempBalPending=0;
-				Integer balPending= sale.getPending() == null ? 0 :sale.getPending();
-				sale.setBalancePending(tempBalPending+balPending);
+					tempBalPending=MoneyRules.money(BigDecimal.ZERO);
+				BigDecimal balPending= MoneyRules.money(sale.getPending());
+				sale.setBalancePending(MoneyRules.money(tempBalPending.add(balPending)));
 			}
            List<Sale> savedSales = saleRepository.saveAll(bulkSalesEntries);
             
@@ -170,8 +170,8 @@ public class SalesServiceImpl implements SalesService {
             // the request: pending is recalculated server-side, so the client's
             // figure is not necessarily what was stored.
             for (Sale savedSale : savedSales) {
-                Integer pending = savedSale.getPending();
-                if (pending != null && pending != 0) {
+                BigDecimal pending = savedSale.getPending();
+                if (pending != null && pending.signum() != 0) {
                     Long customerId = savedSale.getCustomer().getId();
                     customerRepository.updateBalanceAmount(customerId, pending);
                     logger.debug("Balance updated for customer id {} by {}", customerId, pending);
@@ -190,7 +190,7 @@ public class SalesServiceImpl implements SalesService {
                 	Optional<Customer> customer = customerRepository.findById(sale.getCustomer().getId());
                      String customerName = customer.get().getName();
                      String phone = customer.get().getMobileNo();
-                     double amount = (int) customer.get().getBalanceAmount();
+                     double amount = MoneyRules.money(customer.get().getBalanceAmount()).doubleValue();
                      String message = SmsMessageBuilder.buildMarathiSms(customerName, amount);
 
                     // String message = String.format("Hello %s, your sale of ₹%.2f has been recorded. Thank you!", customerName, amount);
@@ -235,12 +235,20 @@ public class SalesServiceImpl implements SalesService {
             Driver driver = driverRepository.findById(saleDTO.getDriverId())
                     .orElseThrow(() -> new ResourceNotFoundException("Driver not found with id: " + saleDTO.getDriverId()));
             
-            // Check credit limit if enabled
-            Integer saleAmount = saleDTO.getAmount();
-            Integer paymentAmount = saleDTO.getPayment() != null ? saleDTO.getPayment() : 0;
-            Integer pendingAmount = saleAmount - paymentAmount;
-            
-            if (customer.isCreditLimitEnabled() && ledgerService.isCreditLimitExceeded(customer, pendingAmount.doubleValue())) {
+            // Calculate the amount here rather than trusting the request, and
+            // reject a disagreement instead of silently overwriting it.
+            BigDecimal saleAmount = MoneyRules.calculateAmount(saleDTO.getKilograms(), saleDTO.getRate());
+            if (saleDTO.getAmount() != null && !MoneyRules.amountsMatch(saleAmount, saleDTO.getAmount())) {
+                throw new IllegalArgumentException(String.format(
+                        "Amount mismatch: %s kg at rate %s is %s, but %s was submitted.",
+                        saleDTO.getKilograms(), saleDTO.getRate(),
+                        saleAmount.toPlainString(), saleDTO.getAmount().toPlainString()));
+            }
+
+            BigDecimal paymentAmount = MoneyRules.money(saleDTO.getPayment());
+            BigDecimal pendingAmount = MoneyRules.calculatePending(saleAmount, paymentAmount);
+
+            if (customer.isCreditLimitEnabled() && ledgerService.isCreditLimitExceeded(customer, pendingAmount)) {
                 throw new RuntimeException("Credit limit exceeded for customer: " + customer.getName() + 
                         ". Current limit: " + customer.getCreditLimit());
             }
@@ -264,9 +272,9 @@ public class SalesServiceImpl implements SalesService {
             sale.setSmsSent(false);
             // Calculate balance pending (previous balance + current pending)
             Sale previousSale = saleRepository.findTopByCustomerIdOrderByIdDesc(customer.getId());
-            Integer previousBalancePending = (previousSale != null && previousSale.getBalancePending() != null) 
-                    ? previousSale.getBalancePending() : 0;
-            sale.setBalancePending(previousBalancePending + pendingAmount);
+            BigDecimal previousBalancePending = (previousSale != null && previousSale.getBalancePending() != null) 
+                    ? previousSale.getBalancePending() : MoneyRules.money(BigDecimal.ZERO);
+            sale.setBalancePending(MoneyRules.money(previousBalancePending.add(pendingAmount)));
             
             // Save the sale
             Sale savedSale = saleRepository.save(sale);
@@ -283,7 +291,7 @@ public class SalesServiceImpl implements SalesService {
                    	Optional<Customer> cust = customerRepository.findById(sale.getCustomer().getId());
                         String customerName = cust.get().getName();
                         String phone = cust.get().getMobileNo();
-                        double amount = (int) cust.get().getBalanceAmount();
+                        double amount = MoneyRules.money(cust.get().getBalanceAmount()).doubleValue();
                         String message = SmsMessageBuilder.buildMarathiSms(customerName, amount);
 
                        // String message = String.format("Hello %s, your sale of ₹%.2f has been recorded. Thank you!", customerName, amount);
@@ -322,12 +330,11 @@ public class SalesServiceImpl implements SalesService {
 			 Optional<SaleDetails> existingSaleDetails = saleDetailsRepository.findByDateAndRouteAndVehicleAndDriver(saleDetails.getDate(), saleDetails.getRoute(), saleDetails.getVehicle(), saleDetails.getDriver());
 		        if (existingSaleDetails.isPresent()) {
 		            logger.info("Sale details found: {}",existingSaleDetails.get());
-		            existingSaleDetails.get().setTotalAmount(existingSaleDetails.get().getTotalAmount()+saleDetails.getTotalAmount());
-		            existingSaleDetails.get().setTotalBirdSale(existingSaleDetails.get().getTotalBirdSale()+saleDetails.getTotalBirdSale());
-		            existingSaleDetails.get().setTotalKilogramSale(existingSaleDetails.get().getTotalKilogramSale()+saleDetails.getTotalKilogramSale());
-		            existingSaleDetails.get().setTotalPaymentReceived(existingSaleDetails.get().getTotalPaymentReceived()+saleDetails.getTotalPaymentReceived());
-		            existingSaleDetails.get().setTotalPending(existingSaleDetails.get().getTotalPending()+saleDetails.getTotalPending());
-		            existingSaleDetails.get().setTotalAmount(existingSaleDetails.get().getTotalAmount()+saleDetails.getTotalAmount());
+		            existingSaleDetails.get().setTotalAmount(MoneyRules.money(MoneyRules.money(existingSaleDetails.get().getTotalAmount()).add(MoneyRules.money(saleDetails.getTotalAmount()))));
+		            existingSaleDetails.get().setTotalBirdSale((existingSaleDetails.get().getTotalBirdSale()==null?0:existingSaleDetails.get().getTotalBirdSale())+(saleDetails.getTotalBirdSale()==null?0:saleDetails.getTotalBirdSale()));
+		            existingSaleDetails.get().setTotalKilogramSale(MoneyRules.weight(MoneyRules.weight(existingSaleDetails.get().getTotalKilogramSale()).add(MoneyRules.weight(saleDetails.getTotalKilogramSale()))));
+		            existingSaleDetails.get().setTotalPaymentReceived(MoneyRules.money(MoneyRules.money(existingSaleDetails.get().getTotalPaymentReceived()).add(MoneyRules.money(saleDetails.getTotalPaymentReceived()))));
+		            existingSaleDetails.get().setTotalPending(MoneyRules.money(MoneyRules.money(existingSaleDetails.get().getTotalPending()).add(MoneyRules.money(saleDetails.getTotalPending()))));
 		            logger.info("Saving Updated Sale details : {}",existingSaleDetails);
 		            return saleDetailsRepository.save(existingSaleDetails.get());
 		            
