@@ -1,6 +1,7 @@
 package com.app.repository;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -12,7 +13,7 @@ import com.app.entity.Purchase;
 
 public interface PurchaseRepository  extends JpaRepository<Purchase, Long>{
 
-	Optional<Purchase> findBySupplierIdAndEntryDate(Long supplierId, String date);
+	Optional<Purchase> findBySupplierIdAndEntryDate(Long supplierId, LocalDate date);
 	@Modifying
     @Query("UPDATE Supplier s SET s.pendingPayment = s.pendingPayment + :amount WHERE s.id = :supplierId")
     int updatePendingAmount(@Param("supplierId") Long supplierId, @Param("amount") BigDecimal amount);

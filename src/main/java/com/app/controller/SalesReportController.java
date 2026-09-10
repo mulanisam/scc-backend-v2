@@ -9,9 +9,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.app.dto.report.CombinedSummaryResponse;
 import com.app.dto.report.SalesReportRequest;
 import com.app.dto.report.SalesReportResponse;
 import com.app.dto.report.TripReconciliationResponse;
+import com.app.service.CombinedReportService;
 import com.app.service.SalesReportService;
 import com.app.service.TripReconciliationService;
 
@@ -39,6 +41,9 @@ public class SalesReportController {
 
     @Autowired
     private TripReconciliationService tripReconciliationService;
+
+    @Autowired
+    private CombinedReportService combinedReportService;
 
     /**
      * Transaction lines. Any combination of route, customer, driver, vehicle and
@@ -78,5 +83,20 @@ public class SalesReportController {
             @Valid @RequestBody SalesReportRequest request) {
         logger.info("Trip reconciliation requested: {}", request);
         return ResponseEntity.ok(tripReconciliationService.reconcile(request));
+    }
+
+    /**
+     * Bought against sold, per period: birds, weight and money on each side, the
+     * rate paid and realised, shrinkage, and margin.
+     *
+     * Also reports coverage. With purchases barely recorded in this database, the
+     * margin would otherwise read as a large profit that is really just the
+     * missing purchase side, so the response says so explicitly.
+     */
+    @PostMapping("/comparison")
+    public ResponseEntity<CombinedSummaryResponse> combined(
+            @Valid @RequestBody SalesReportRequest request) {
+        logger.info("Bought vs sold requested: {}", request);
+        return ResponseEntity.ok(combinedReportService.compare(request));
     }
 }

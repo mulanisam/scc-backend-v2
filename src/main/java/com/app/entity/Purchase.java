@@ -1,6 +1,7 @@
 package com.app.entity;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -29,7 +30,7 @@ public class Purchase extends AuditableEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    private String entryDate;
+    private LocalDate entryDate;
     private String branch;
     private String farm;
     private String supervisorName;

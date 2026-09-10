@@ -141,7 +141,9 @@ public class PurchaseServiceImpl implements PurchaseService {
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         LocalDate date = LocalDate.parse(entryDate, formatter);
 
-        Optional<Purchase> purchaseEntry = purchaseRepository.findBySupplierIdAndEntryDate(supplierId, entryDate);      
+        // Passes the parsed date, which this method already computed and then
+        // discarded in favour of the raw string.
+        Optional<Purchase> purchaseEntry = purchaseRepository.findBySupplierIdAndEntryDate(supplierId, date);
         
         // Handle the case where purchaseEntry is not present
         if (purchaseEntry.isPresent()) {
@@ -169,7 +171,7 @@ public class PurchaseServiceImpl implements PurchaseService {
 		Supplier supplier = supplierRepository.findById(purchasePaymentDto.getSupplier())
                 .orElseThrow(() -> new RuntimeException("Supplier not found"));
 		
-		Purchase purchaseEntry = purchaseRepository.findBySupplierIdAndEntryDate(purchasePaymentDto.getSupplier(), purchasePaymentDto.getDateOfPurchase().toString())
+		Purchase purchaseEntry = purchaseRepository.findBySupplierIdAndEntryDate(purchasePaymentDto.getSupplier(), purchasePaymentDto.getDateOfPurchase())
 				 .orElseThrow(() -> new RuntimeException("Purchase Entry not found"));
 
 		paymentHist.setDateOfPurchase(purchasePaymentDto.getDateOfPurchase());
