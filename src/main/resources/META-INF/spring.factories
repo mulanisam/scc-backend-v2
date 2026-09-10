@@ -1,0 +1,7 @@
+# EnvironmentPostProcessor implementations are loaded through SpringFactoriesLoader,
+# which reads this file. The META-INF/spring/<name>.imports convention is only for
+# auto-configuration classes, so registering the post-processor there did nothing -
+# the application started with no profile and failed later with Spring's generic
+# "Failed to configure a DataSource" instead of the message that says to set ENV.
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.app.config.RequiredProfileEnvironmentPostProcessor
