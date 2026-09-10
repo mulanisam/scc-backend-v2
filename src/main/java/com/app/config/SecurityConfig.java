@@ -100,6 +100,15 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .authorizeHttpRequests(request -> request
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                        // Creating users is an administrator action. This rule
+                        // must precede the /auth/** rule below, which is open so
+                        // that login works. Registration accepted a client-supplied
+                        // role while sitting behind that open rule, so anyone who
+                        // could reach the API could POST themselves an ADMIN
+                        // account with no credentials at all.
+                        .requestMatchers(HttpMethod.POST, "/auth/register").hasAuthority(ADMIN)
+
                         .requestMatchers("/auth/**", "/public/**").permitAll()
 
                         // Administration

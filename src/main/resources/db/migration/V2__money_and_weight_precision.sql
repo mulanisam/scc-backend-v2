@@ -19,9 +19,15 @@
 -- reviewable on its own.
 
 -- Sale lines ----------------------------------------------------------------
+-- rate carries 4 decimal places, not 2. Some historical rates were evidently
+-- back-computed as amount / kilograms and kept the full quotient: 124 rows in
+-- production hold values such as 114.055 and 123.177. DECIMAL(12,2) silently
+-- truncated those (MySQL warning 1265), so the scale matches the data instead.
+-- Measured on production: 124 rows exceed 2 dp, 1 exceeds 3 dp, none exceed 4.
+-- kilograms never exceeds 3 dp.
 ALTER TABLE `sale`
     MODIFY COLUMN `kilograms`       DECIMAL(12,3) NULL,
-    MODIFY COLUMN `rate`            DECIMAL(12,2) NULL,
+    MODIFY COLUMN `rate`            DECIMAL(12,4) NULL,
     MODIFY COLUMN `amount`          DECIMAL(14,2) NULL,
     MODIFY COLUMN `payment`         DECIMAL(14,2) NULL,
     MODIFY COLUMN `pending`         DECIMAL(14,2) NULL,

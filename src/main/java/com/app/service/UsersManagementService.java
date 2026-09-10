@@ -2,6 +2,7 @@ package com.app.service;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,18 +31,36 @@ public class UsersManagementService {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    /** Roles this application recognises. Anything else is rejected. */
+    private static final Set<String> ALLOWED_ROLES = Set.of("ADMIN", "USER", "DRIVER");
+
     @Transactional
     public ReqRes register(ReqRes registrationRequest) {
         ReqRes resp = new ReqRes();
         try {
+            // The role arrives from the client, so it is validated against a
+            // fixed set rather than stored as given. Combined with the ADMIN
+            // requirement on POST /auth/register, this closes the path by which
+            // an unauthenticated caller could create an ADMIN account.
+            String role = registrationRequest.getRole();
+            if (role == null || !ALLOWED_ROLES.contains(role)) {
+                resp.setStatusCode(400);
+                resp.setError("Role must be one of " + ALLOWED_ROLES);
+                logger.warn("Rejected registration for {}: invalid role {}",
+                        registrationRequest.getUsername(), role);
+                return resp;
+            }
+
             User ourUser = new User();
             ourUser.setUsername(registrationRequest.getUsername());
-            ourUser.setRole(registrationRequest.getRole());
+            ourUser.setRole(role);
             ourUser.setName(registrationRequest.getName());
             ourUser.setPassword(passwordEncoder.encode(registrationRequest.getPassword()));
             User ourUsersResult = usersRepo.save(ourUser);
             if (ourUsersResult.getId() > 0) {
-                resp.setUser(ourUsersResult);
+                // The saved entity is deliberately not returned: it carries the
+                // bcrypt password hash, which was previously echoed straight
+                // back to the caller in the response body.
                 resp.setMessage("User Saved Successfully");
                 resp.setStatusCode(200);
                 logger.info("User registered successfully: {}", ourUser.getUsername());
