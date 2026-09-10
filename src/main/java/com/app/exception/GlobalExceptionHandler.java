@@ -7,12 +7,17 @@ import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.ServletWebRequest;
+import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -24,7 +29,13 @@ import jakarta.servlet.http.HttpServletRequest;
  * exception handling: each controller caught its own exceptions and returned a
  * bare 500. It now sits under com.app.exception and is actually registered.
  *
- * Two rules it follows that the original did not:
+ * It extends ResponseEntityExceptionHandler so Spring's own MVC exceptions keep
+ * the status they already carry. Without that, an unknown URL, a wrong HTTP verb
+ * and an unreadable request body all fell through to the catch-all below and
+ * were reported as 500 - a mistyped URL looked like a server fault and was
+ * logged at ERROR with a stack trace.
+ *
+ * Two further rules the original did not follow:
  *
  *  - Stack traces are logged. The old code passed ex.getMessage() as the only
  *    argument, which logs one line and discards the trace, leaving production
@@ -35,7 +46,7 @@ import jakarta.servlet.http.HttpServletRequest;
  *    log, so "error a1b2c3d4" can be traced without leaking anything.
  */
 @RestControllerAdvice
-public class GlobalExceptionHandler {
+public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
@@ -47,7 +58,7 @@ public class GlobalExceptionHandler {
         logger.warn("Resource not found on {} {}: {}",
                 request.getMethod(), request.getRequestURI(), ex.getMessage());
 
-        return response(HttpStatus.NOT_FOUND, ex.getMessage(), request, null);
+        return response(HttpStatus.NOT_FOUND, ex.getMessage(), request.getRequestURI(), null);
     }
 
     /**
@@ -62,23 +73,31 @@ public class GlobalExceptionHandler {
         logger.warn("Rejected {} {}: {}",
                 request.getMethod(), request.getRequestURI(), ex.getMessage());
 
-        return response(HttpStatus.BAD_REQUEST, ex.getMessage(), request, null);
+        return response(HttpStatus.BAD_REQUEST, ex.getMessage(), request.getRequestURI(), null);
     }
 
-    /** Bean Validation failures, reported per field. */
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, Object>> handleValidation(
-            MethodArgumentNotValidException ex, HttpServletRequest request) {
+    /**
+     * Bean Validation failures, reported per field.
+     *
+     * Overrides the inherited handler so the response names the offending fields
+     * rather than returning a bare 400.
+     */
+    @Override
+    protected ResponseEntity<Object> handleMethodArgumentNotValid(
+            MethodArgumentNotValidException ex, HttpHeaders headers,
+            HttpStatusCode status, WebRequest request) {
 
         Map<String, Object> fields = new LinkedHashMap<>();
         for (FieldError error : ex.getBindingResult().getFieldErrors()) {
             fields.putIfAbsent(error.getField(), error.getDefaultMessage());
         }
 
-        logger.warn("Validation failed on {} {}: {}",
-                request.getMethod(), request.getRequestURI(), fields);
+        String path = path(request);
+        logger.warn("Validation failed on {}: {}", path, fields);
 
-        return response(HttpStatus.BAD_REQUEST, "Some fields are invalid.", request, fields);
+        Map<String, Object> body = baseBody(HttpStatus.BAD_REQUEST, "Some fields are invalid.", path);
+        body.put("fields", fields);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 
     /** Anything unexpected: logged in full, described to the caller only by reference. */
@@ -94,31 +113,36 @@ public class GlobalExceptionHandler {
 
         Map<String, Object> body = baseBody(HttpStatus.INTERNAL_SERVER_ERROR,
                 "Something went wrong. Quote reference " + reference + " when reporting this.",
-                request);
+                request.getRequestURI());
         body.put("reference", reference);
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
     }
 
     private ResponseEntity<Map<String, Object>> response(HttpStatus status, String message,
-            HttpServletRequest request, Map<String, Object> fields) {
+            String path, Map<String, Object> fields) {
 
-        Map<String, Object> body = baseBody(status, message, request);
+        Map<String, Object> body = baseBody(status, message, path);
         if (fields != null && !fields.isEmpty()) {
             body.put("fields", fields);
         }
         return ResponseEntity.status(status).body(body);
     }
 
-    private Map<String, Object> baseBody(HttpStatus status, String message,
-            HttpServletRequest request) {
-
+    private Map<String, Object> baseBody(HttpStatus status, String message, String path) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("timestamp", OffsetDateTime.now().toString());
         body.put("status", status.value());
         body.put("error", status.getReasonPhrase());
         body.put("message", message);
-        body.put("path", request.getRequestURI());
+        body.put("path", path);
         return body;
+    }
+
+    private String path(WebRequest request) {
+        if (request instanceof ServletWebRequest servletRequest) {
+            return servletRequest.getRequest().getRequestURI();
+        }
+        return request.getDescription(false);
     }
 }
