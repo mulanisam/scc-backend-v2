@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -18,6 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.app.dto.CityDTO;
 import com.app.dto.CustomerDTO;
+import com.app.dto.contact.ContactQualityResponse;
+import com.app.dto.contact.MobileNumberUpdateRequest;
 import com.app.entity.City;
 import com.app.entity.Customer;
 import com.app.entity.Driver;
@@ -26,6 +29,7 @@ import com.app.entity.PartyVehicle;
 import com.app.entity.Route;
 import com.app.entity.Supplier;
 import com.app.entity.Vehicle;
+import com.app.service.ContactQualityService;
 import com.app.service.MasterDataService;
 
 @RestController
@@ -36,6 +40,9 @@ public class MasterDataController {
 
     @Autowired
     private MasterDataService masterDataService;
+
+    @Autowired
+    private ContactQualityService contactQualityService;
 
     @GetMapping("/customers")
     public ResponseEntity<List<Customer>> getAllCustomers() {
@@ -80,6 +87,35 @@ public class MasterDataController {
         logger.info("Deleted customer with ID: {}", id);
         logger.info("Exiting deleteCustomer endpoint");
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * The state of the customer contact book: who cannot be messaged and why, and
+     * which numbers are shared by more than one customer.
+     *
+     * Needed before statements can be sent over WhatsApp, because a statement
+     * carries a balance and can only go to a number belonging to one customer.
+     */
+    @GetMapping("/customers/contact-quality")
+    public ResponseEntity<ContactQualityResponse> getContactQuality() {
+        logger.info("Entering getContactQuality endpoint");
+        return ResponseEntity.ok(contactQualityService.getContactQuality());
+    }
+
+    /**
+     * Corrects one customer's mobile number and touches nothing else.
+     *
+     * Separate from PUT /customers/{id}, which takes a whole CustomerDTO - fixing a
+     * phone number through that means resending every other field, and whatever the
+     * caller omits is written back as null.
+     */
+    @PatchMapping("/customers/{id}/mobile")
+    public ResponseEntity<Customer> updateCustomerMobile(
+            @PathVariable Long id,
+            @RequestBody MobileNumberUpdateRequest request) {
+
+        logger.info("Entering updateCustomerMobile endpoint for customer {}", id);
+        return ResponseEntity.ok(contactQualityService.updateMobileNumber(id, request.getMobileNo()));
     }
 
     @GetMapping("/customers/byRoute/{routeId}")

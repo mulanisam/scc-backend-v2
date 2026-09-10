@@ -23,5 +23,12 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     @Query("UPDATE Customer c SET c.balanceAmount = c.balanceAmount + :amount WHERE c.id = :customerId")
     int updateBalanceAmount(@Param("customerId") Long customerId, @Param("amount") BigDecimal amount);
 
+	/**
+	 * Everyone recorded against one number. Returns a list rather than an Optional
+	 * because sharing is the situation being detected, not an error to be hidden:
+	 * production has 11 numbers on two or more customers, one on seven.
+	 */
+	List<Customer> findByMobileNo(String mobileNo);
+
 }
 
