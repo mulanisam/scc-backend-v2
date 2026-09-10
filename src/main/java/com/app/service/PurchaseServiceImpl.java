@@ -1,5 +1,6 @@
 package com.app.service;
 
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -24,6 +25,7 @@ import com.app.dto.DcDetailDTO;
 import com.app.dto.PurchaseDTO;
 import com.app.dto.PurchaseDetailsDTO;
 import com.app.dto.PurchasePaymentDTO;
+import com.app.utility.MoneyRules;
 import com.app.entity.DcDetail;
 import com.app.entity.Driver;
 import com.app.entity.Purchase;
@@ -80,13 +82,13 @@ public class PurchaseServiceImpl implements PurchaseService {
         purchase.setDriver(driver);
         purchase.setSupplier(supplier);
        
-        double totalAmount=0;
+        BigDecimal totalAmount = BigDecimal.ZERO;
         for (int i = 0; i < purchaseDTO.getDcDetails().size(); i++) {
             DcDetailDTO dcDetailDTO = purchaseDTO.getDcDetails().get(i);
             DcDetail dcDetail = new DcDetail();
             BeanUtils.copyProperties(dcDetailDTO, dcDetail);
             dcDetail.setPurchase(purchase);
-            totalAmount=totalAmount+dcDetailDTO.getAmount();
+            totalAmount = totalAmount.add(MoneyRules.money(dcDetailDTO.getAmount()));
             if (files.get(i) != null && !files.get(i).isEmpty()) {
                 MultipartFile file = files.get(i);
                 try {
@@ -99,8 +101,8 @@ public class PurchaseServiceImpl implements PurchaseService {
 
             purchase.getDcDetails().add(dcDetail);
         }
-        purchase.setTotalAmount(totalAmount);
-        purchase.setPaidAmount(0.0);
+        purchase.setTotalAmount(MoneyRules.money(totalAmount));
+        purchase.setPaidAmount(MoneyRules.money(BigDecimal.ZERO));
         Purchase savedPurchase = purchaseRepository.save(purchase);
         logger.info("Purchase created successfully with ID: {}", savedPurchase.getId());
         
@@ -148,14 +150,14 @@ public class PurchaseServiceImpl implements PurchaseService {
             // If purchaseHist is present, return its pending payment and 0.0, else return the purchaseEntry's total and paid amounts
             if (purchaseHist.isPresent()) {
                 SupplierPaymentHist histEntry = purchaseHist.get();
-                return new PurchaseDetailsDTO(histEntry.getPendingPayment(), 0.0);
+                return new PurchaseDetailsDTO(MoneyRules.money(histEntry.getPendingPayment()), MoneyRules.money(BigDecimal.ZERO));
             } else {
                 Purchase entry = purchaseEntry.get();
                 return new PurchaseDetailsDTO(entry.getTotalAmount(), entry.getPaidAmount());
             }
         } else {
             // If both purchaseEntry and purchaseHist are not present, return DTO with default values
-            return new PurchaseDetailsDTO(0.0, 0.0);
+            return new PurchaseDetailsDTO(MoneyRules.money(BigDecimal.ZERO), MoneyRules.money(BigDecimal.ZERO));
         }
     }
 
@@ -183,7 +185,7 @@ public class PurchaseServiceImpl implements PurchaseService {
 		
 		Optional<SupplierPaymentHist> purchaseHist =  payHistRepository.findTopByPurchaseOrderByIdDesc(purchase);
 		if(purchaseHist.isPresent()) {
-			paymentHist.setPendingPayment(purchaseHist.get().getPendingPayment()-purchasePaymentDto.getPaidAmount());
+			paymentHist.setPendingPayment(MoneyRules.money(MoneyRules.money(purchaseHist.get().getPendingPayment()).subtract(MoneyRules.money(purchasePaymentDto.getPaidAmount()))));
 		}else
 		{
 			paymentHist.setPendingPayment(purchasePaymentDto.getPendingPayment());
@@ -191,7 +193,7 @@ public class PurchaseServiceImpl implements PurchaseService {
 		SupplierPaymentHist paymentHistSaved = payHistRepository.save(paymentHist);
 		logger.info("Purchase Payment created successfully with ID: {}", paymentHist.getId());
 		
-		purchaseRepository.updatePendingAmount(purchasePaymentDto.getSupplier(), (-purchasePaymentDto.getPaidAmount()));
+		purchaseRepository.updatePendingAmount(purchasePaymentDto.getSupplier(), MoneyRules.money(purchasePaymentDto.getPaidAmount()).negate());
 		logger.info("Pending amount updated for Supplier Id : {} ", purchasePaymentDto.getPendingPayment());
 		return paymentHistSaved;
 	}

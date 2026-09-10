@@ -1,5 +1,6 @@
 package com.app.repository;
 
+import java.math.BigDecimal;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -14,6 +15,6 @@ public interface PurchaseRepository  extends JpaRepository<Purchase, Long>{
 	Optional<Purchase> findBySupplierIdAndEntryDate(Long supplierId, String date);
 	@Modifying
     @Query("UPDATE Supplier s SET s.pendingPayment = s.pendingPayment + :amount WHERE s.id = :supplierId")
-    int updatePendingAmount(@Param("supplierId") Long supplierId, @Param("amount") Double amount);
+    int updatePendingAmount(@Param("supplierId") Long supplierId, @Param("amount") BigDecimal amount);
 
 }

@@ -1,5 +1,6 @@
 package com.app.entity;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import jakarta.persistence.*;
 import lombok.*;
@@ -18,12 +19,12 @@ public class TradingEntry {
     private LocalDate date;
 
     private Integer birds;
-    private Double kilograms;
-    private Double rate;
-    private Integer amount;
-    private Integer payment;
-    private Integer pending;
-    private Integer balanceAmount;
+    private BigDecimal kilograms;
+    private BigDecimal rate;
+    private BigDecimal amount;
+    private BigDecimal payment;
+    private BigDecimal pending;
+    private BigDecimal balanceAmount;
     private String description;
 
     @ManyToOne(fetch = FetchType.LAZY)

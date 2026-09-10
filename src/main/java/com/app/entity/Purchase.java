@@ -1,5 +1,6 @@
 package com.app.entity;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,12 +34,12 @@ public class Purchase extends AuditableEntity {
     private String farm;
     private String supervisorName;
     private String supervisorPhoneNo;
-    private String driverExpense;
-    private String diesel;
-    private String hamali;
+    private BigDecimal driverExpense;
+    private BigDecimal diesel;
+    private BigDecimal hamali;
     private String notes;
-    private Double totalAmount;
-    private Double paidAmount; 
+    private BigDecimal totalAmount;
+    private BigDecimal paidAmount;
 
     @ManyToOne
     @JoinColumn(name = "vehicle_id")

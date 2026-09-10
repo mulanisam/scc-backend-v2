@@ -8,9 +8,9 @@ import lombok.Data;
 public class DcDetailDTO {
     private Integer srNo;
     private String dcNo;
-    private String nos;
-    private String kilograms;
-    private String rate;
-    private Double amount;
+    private Integer nos;
+    private BigDecimal kilograms;
+    private BigDecimal rate;
+    private BigDecimal amount;
 
 }

@@ -1,5 +1,6 @@
 package com.app.entity;
 
+import java.math.BigDecimal;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import jakarta.persistence.CascadeType;
@@ -39,7 +40,7 @@ public class Party {
     private String address;
 
     @Column(name = "balance_amount")
-    private Integer balanceAmount;
+    private BigDecimal balanceAmount;
 
     @Column(name = "is_obsolete")
     private Boolean isObsolete;

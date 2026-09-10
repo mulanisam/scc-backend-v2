@@ -1,5 +1,6 @@
 package com.app.entity;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 import jakarta.persistence.Entity;
@@ -25,9 +26,9 @@ public class SupplierPaymentHist {
     private LocalDate dateOfPurchase;
     private LocalDate dateOfTransaction;
     private String trans_id;
-    private Double totalAmount;
-    private Double paidAmount;
-    private Double pendingPayment;
+    private BigDecimal totalAmount;
+    private BigDecimal paidAmount;
+    private BigDecimal pendingPayment;
     private String comment;
     
     @ManyToOne(fetch = FetchType.LAZY)

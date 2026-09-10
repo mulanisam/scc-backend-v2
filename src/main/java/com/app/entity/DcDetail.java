@@ -23,10 +23,10 @@ public class DcDetail {
 	    private Long id;
 	   
 	    private String dcNo;
-	    private String nos;
-	    private String kilograms;
-	    private String rate;
-	    private Double amount;
+	    private Integer nos;
+	    private BigDecimal kilograms;
+	    private BigDecimal rate;
+	    private BigDecimal amount;
 
 	    @ManyToOne(fetch = FetchType.LAZY)
 	    @JoinColumn(name = "purchase_id")

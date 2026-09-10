@@ -1,5 +1,6 @@
 package com.app.entity;
 
+import java.math.BigDecimal;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -18,6 +19,6 @@ public class Supplier {
     private Long id;
     private String name;
     private String branch;
-    private Double pendingPayment;
+    private BigDecimal pendingPayment;
     private boolean obsolete =false;
 }
