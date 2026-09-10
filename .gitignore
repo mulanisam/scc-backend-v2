@@ -42,3 +42,7 @@ bin/
 
 ### macOS ###
 .DS_Store
+
+### Database dumps (contain customer data; never commit) ###
+backups/
+*.sql.gz
