@@ -113,6 +113,16 @@
 		  parent; flyway-mysql is a separate module because Flyway 10 split
 		  per-database support out of core.
 		-->
+		<!--
+		  Bean Validation. Previously absent, so every input rule lived only in
+		  the React forms and the API accepted negative weights, null customers
+		  and absurd rates.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-core</artifactId>

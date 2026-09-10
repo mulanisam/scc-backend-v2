@@ -11,17 +11,17 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 
 @Entity
 @Data
+@EqualsAndHashCode(callSuper = false)
 @NoArgsConstructor
 @AllArgsConstructor
-public class CustomerPayment {
+public class CustomerPayment extends AuditableEntity {
     
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -46,23 +46,11 @@ public class CustomerPayment {
     private String remarks;
     
     private String receivedBy; // User who recorded the payment
-    
-    @Column(nullable = false, updatable = false)
-    private LocalDateTime createdAt;
-    
-    private LocalDateTime updatedAt;
-    
+
     @Column(nullable = false)
     private boolean isDeleted = false;
-    
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
-    }
-    
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
+
+    // createdAt / updatedAt, and the @PrePersist and @PreUpdate callbacks that
+    // maintained them, have moved to AuditableEntity so that every business
+    // record is stamped the same way and also records WHO made the change.
 }

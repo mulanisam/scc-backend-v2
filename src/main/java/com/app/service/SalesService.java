@@ -4,6 +4,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import com.app.dto.SalesBulkEntryDto;
+import com.app.dto.TripContextDTO;
 import com.app.dto.SingleSaleEntryDTO;
 import com.app.entity.Sale;
 import com.app.entity.SaleDetails;
@@ -19,4 +20,11 @@ public interface SalesService {
 
         public SaleDetails saveSaleDetails(SaleDetails saleDetails);
         public SaleDetails getSaleDetails(LocalDate date, String route, String vehicle, String driver);
+
+        /**
+         * Context the entry screen needs before submitting: whether a trip is
+         * already recorded for this date and route, and when the route last had
+         * a sale.
+         */
+        public TripContextDTO getTripContext(LocalDate date, Long routeId);
 }

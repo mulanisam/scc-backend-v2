@@ -5,6 +5,7 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.app.dto.SalesBulkEntryDto;
+import com.app.dto.TripContextDTO;
 import com.app.dto.SingleSaleEntryDTO;
 import com.app.entity.Sale;
 import com.app.entity.SaleDetails;
@@ -27,7 +29,9 @@ import com.app.repository.DriverRepository;
 import com.app.repository.SaleRepository;
 import com.app.service.SalesService;
 
-import cutsomException.ResourceNotFoundException;
+import com.app.exception.ResourceNotFoundException;
+
+import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping("/user/sales")
@@ -81,34 +85,35 @@ public class SaleController {
         }
     }
 
-    @PostMapping("/bulk")
-    public ResponseEntity<List<Sale>> salesBulkEntry(@RequestBody SalesBulkEntryDto salesBulkEntryDto) {
-        logger.info("Entering salesBulkEntry method with parameters: {}", salesBulkEntryDto);
-        try {
-            List<Sale> result = saleService.salesBulkEntry(salesBulkEntryDto);
-            logger.info("Bulk sales entry created successfully with {} records", result.size());
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            logger.error("Error during bulk sales entry: {}", e.getMessage(), e);
-            return ResponseEntity.status(500).build();
-        }
-    }
-    
     /**
-     * New: Create single sale entry with automatic ledger creation
+     * Exceptions deliberately propagate to GlobalExceptionHandler rather than
+     * being caught here. These methods previously swallowed everything and
+     * returned a bare 500, which would hide the validation messages the service
+     * raises - "bird count does not balance", "amount mismatch" - and leave the
+     * operator with nothing to act on. The handler turns those into a 400
+     * carrying the message, and anything genuinely unexpected into a 500 with a
+     * log reference.
+     */
+    @PostMapping("/bulk")
+    public ResponseEntity<List<Sale>> salesBulkEntry(@Valid @RequestBody SalesBulkEntryDto salesBulkEntryDto) {
+        logger.info("Bulk sales entry for {} on route {}",
+                salesBulkEntryDto.getDate(), salesBulkEntryDto.getRoute());
+
+        List<Sale> result = saleService.salesBulkEntry(salesBulkEntryDto);
+        logger.info("Bulk sales entry created successfully with {} records", result.size());
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Create single sale entry with automatic ledger creation.
      */
     @PostMapping("/single")
-    public ResponseEntity<?> createSingleSale(@RequestBody SingleSaleEntryDTO saleDTO) {
-        logger.info("Creating single sale entry: {}", saleDTO);
-        try {
-            Sale sale = saleService.createSingleSale(saleDTO);
-            logger.info("Single sale created with ID: {}", sale.getId());
-            return ResponseEntity.ok(sale);
-        } catch (Exception e) {
-            logger.error("Error creating single sale: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to create sale: " + e.getMessage());
-        }
+    public ResponseEntity<Sale> createSingleSale(@Valid @RequestBody SingleSaleEntryDTO saleDTO) {
+        logger.info("Single sale entry for customer {} on {}", saleDTO.getCustomerId(), saleDTO.getDate());
+
+        Sale sale = saleService.createSingleSale(saleDTO);
+        logger.info("Single sale created with ID: {}", sale.getId());
+        return ResponseEntity.ok(sale);
     }
 
     @GetMapping("/{id}")
@@ -185,6 +190,23 @@ public class SaleController {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Error creating sale details", e);
         }
     }
+    /**
+     * Context the entry screen needs before it submits: whether a trip already
+     * exists for this date and route, and when the route last had a sale.
+     *
+     * The client cannot answer either question on its own, so without this it
+     * could not warn about a duplicate submission or ask the operator to confirm
+     * a backdated entry.
+     */
+    @GetMapping("/tripContext")
+    public ResponseEntity<TripContextDTO> getTripContext(
+            @RequestParam("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam("route") Long routeId) {
+
+        logger.info("Trip context requested for date {} on route {}", date, routeId);
+        return ResponseEntity.ok(saleService.getTripContext(date, routeId));
+    }
+
     @GetMapping("/saleDetails")
     public ResponseEntity<?> getSaleDetails(
             @RequestParam("date") LocalDate date,

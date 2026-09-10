@@ -29,7 +29,7 @@ import com.app.repository.RouteRepository;
 import com.app.repository.SupplierRepository;
 import com.app.repository.VehicleRepository;
 
-import cutsomException.ResourceNotFoundException;
+import com.app.exception.ResourceNotFoundException;
 
 
 @Service

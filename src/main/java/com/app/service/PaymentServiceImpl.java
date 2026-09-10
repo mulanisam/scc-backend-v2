@@ -17,7 +17,7 @@ import com.app.entity.CustomerPayment;
 import com.app.repository.CustomerPaymentRepository;
 import com.app.repository.CustomerRepository;
 
-import cutsomException.ResourceNotFoundException;
+import com.app.exception.ResourceNotFoundException;
 
 @Service
 public class PaymentServiceImpl implements PaymentService {

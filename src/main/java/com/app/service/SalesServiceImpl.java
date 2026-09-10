@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.app.dto.SaleLineDto;
 import com.app.dto.SaleMapper;
 import com.app.dto.SalesBulkEntryDto;
+import com.app.dto.TripContextDTO;
 import com.app.dto.SingleSaleEntryDTO;
 import com.app.entity.Customer;
 import com.app.entity.Driver;
@@ -30,7 +31,7 @@ import com.app.repository.VehicleRepository;
 import com.app.utility.MoneyRules;
 import com.app.utility.SmsMessageBuilder;
 
-import cutsomException.ResourceNotFoundException;
+import com.app.exception.ResourceNotFoundException;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -85,6 +86,17 @@ public class SalesServiceImpl implements SalesService {
             throw new IllegalArgumentException("A sale entry must contain at least one customer line.");
         }
 
+        if (dto.getDate() == null) {
+            throw new IllegalArgumentException("A sale entry must have a date.");
+        }
+
+        // A sale cannot be recorded before it happens. Enforced here as well as
+        // in the browser, because the API is reachable directly.
+        if (dto.getDate().isAfter(LocalDate.now())) {
+            throw new IllegalArgumentException("Sale date " + dto.getDate()
+                    + " is in the future. Future-dated sales cannot be saved.");
+        }
+
         int soldBirds = 0;
         for (SaleLineDto line : lines) {
             if (line.getCustomerId() == null) {
@@ -115,8 +127,13 @@ public class SalesServiceImpl implements SalesService {
     @Override
     public List<Sale> salesBulkEntry(SalesBulkEntryDto salesBulkEntryDto) {
         logger.info("Entering salesBulkEntry method with parameters: {}", salesBulkEntryDto);
+
+        // Validated outside the try below, which wraps everything in a plain
+        // RuntimeException and would otherwise turn these rejections into a 500
+        // with no usable message for the operator.
+        validateBulkEntry(salesBulkEntryDto);
+
         try {
-            validateBulkEntry(salesBulkEntryDto);
         	// Create or retrieve SaleDetails
             SaleDetails saleDetails = new SaleDetails();
             saleDetails.setDate(salesBulkEntryDto.getDate());
@@ -210,9 +227,15 @@ public class SalesServiceImpl implements SalesService {
              saleRepository.saveAll(savedSales);
             logger.info("Bulk sales entry created successfully with {} records", savedSales.size());
             return savedSales;
+        } catch (IllegalArgumentException | ResourceNotFoundException e) {
+            // Business rejections keep their type so the exception handler can
+            // report them as 400 with the message intact.
+            throw e;
         } catch (Exception e) {
-            logger.error("Error during bulk sales entry: {}", e.getMessage(), e);
-            throw new RuntimeException("Bulk sales entry failed: " + e.getMessage());
+            // The cause is preserved rather than flattened into a string, so the
+            // original stack trace survives to the log.
+            logger.error("Error during bulk sales entry", e);
+            throw new RuntimeException("Bulk sales entry failed", e);
         }
     }
     
@@ -313,12 +336,13 @@ public class SalesServiceImpl implements SalesService {
             
             return savedSale;
             
-        } catch (ResourceNotFoundException e) {
-            logger.error("Resource not found: {}", e.getMessage());
+        } catch (IllegalArgumentException | ResourceNotFoundException e) {
+            // Business rejections keep their type so they surface as 400 with
+            // the message, not as an opaque 500.
             throw e;
         } catch (Exception e) {
-            logger.error("Error creating single sale: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to create sale: " + e.getMessage());
+            logger.error("Error creating single sale", e);
+            throw new RuntimeException("Failed to create sale", e);
         }
     }
 
@@ -373,5 +397,40 @@ public class SalesServiceImpl implements SalesService {
             //throw new ResourceNotFoundException("Sale details not found for the given criteria.");
         }
     }
-}
 
+    @Override
+    public TripContextDTO getTripContext(LocalDate date, Long routeId) {
+        Route route = routeRepository.findById(routeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Route not found with id: " + routeId));
+
+        TripContextDTO context = new TripContextDTO();
+        context.setDate(date);
+        context.setRouteId(routeId);
+
+        List<SaleDetails> existing = saleDetailsRepository.findByDateAndRoute(date, route);
+        context.setExistingTripCount(existing.size());
+        context.setDuplicate(!existing.isEmpty());
+
+        int birds = 0;
+        BigDecimal amount = BigDecimal.ZERO;
+        for (SaleDetails trip : existing) {
+            birds += trip.getTotalBirdSale() == null ? 0 : trip.getTotalBirdSale();
+            amount = amount.add(MoneyRules.money(trip.getTotalAmount()));
+        }
+        context.setExistingBirds(birds);
+        context.setExistingAmount(MoneyRules.money(amount));
+
+        saleDetailsRepository.findTopByRouteOrderByDateDescIdDesc(route).ifPresent(latest -> {
+            context.setLastSaleDate(latest.getDate());
+            if (latest.getDate() != null && date != null && date.isBefore(latest.getDate())) {
+                context.setDaysBeforeLastSale(
+                        (int) java.time.temporal.ChronoUnit.DAYS.between(date, latest.getDate()));
+            }
+        });
+
+        logger.debug("Trip context for {} on route {}: duplicate={}, lastSale={}",
+                date, routeId, context.isDuplicate(), context.getLastSaleDate());
+
+        return context;
+    }
+}

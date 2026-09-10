@@ -1,4 +1,4 @@
-package cutsomException;
+package com.app.exception;
 
 
 import org.springframework.http.HttpStatus;

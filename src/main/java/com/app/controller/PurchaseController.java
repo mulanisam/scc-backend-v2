@@ -30,7 +30,7 @@ import com.app.repository.SupplierRepository;
 import com.app.service.PurchaseService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import cutsomException.ResourceNotFoundException;
+import com.app.exception.ResourceNotFoundException;
 
 @RestController
 @RequestMapping("/user/purchases")
