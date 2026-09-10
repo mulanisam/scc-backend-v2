@@ -2,7 +2,7 @@ package com.app.dto;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
+
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -19,7 +19,7 @@ public class SalesBulkEntryDto {
     private Long vehicleNo;
     private Long route;
     private Long driver;
-    private List<Map<String, Object>> salesDetails;
+    private List<SaleLineDto> salesDetails;
     
     private Integer totalBirds;
     private Integer mortality;

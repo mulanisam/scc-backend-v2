@@ -1,8 +1,8 @@
 package com.app.service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.app.dto.SaleLineDto;
 import com.app.dto.SaleMapper;
 import com.app.dto.SalesBulkEntryDto;
 import com.app.dto.SingleSaleEntryDTO;
@@ -26,6 +27,7 @@ import com.app.repository.RouteRepository;
 import com.app.repository.SaleDetailsRepository;
 import com.app.repository.SaleRepository;
 import com.app.repository.VehicleRepository;
+import com.app.utility.MoneyRules;
 import com.app.utility.SmsMessageBuilder;
 
 import cutsomException.ResourceNotFoundException;
@@ -66,11 +68,55 @@ public class SalesServiceImpl implements SalesService {
     private EntityManager entityManager;
 
 
+    /**
+     * Rejects a bulk entry that does not add up, before anything is written.
+     *
+     * Two checks the API previously left entirely to the browser:
+     * every bird loaded must be sold, dead or returned; and the amount the
+     * client calculated must match what the server calculates from kilograms
+     * and rate. A mismatch means the two sides disagree about the rounding
+     * rule, which is how the same sale came to be booked at different amounts
+     * from different screens - so it fails loudly rather than being overwritten
+     * in silence.
+     */
+    private void validateBulkEntry(SalesBulkEntryDto dto) {
+        List<SaleLineDto> lines = dto.getSalesDetails();
+        if (lines == null || lines.isEmpty()) {
+            throw new IllegalArgumentException("A sale entry must contain at least one customer line.");
+        }
+
+        int soldBirds = 0;
+        for (SaleLineDto line : lines) {
+            if (line.getCustomerId() == null) {
+                throw new IllegalArgumentException("Every sale line must name a customer.");
+            }
+            soldBirds += line.getBirds() == null ? 0 : line.getBirds();
+
+            BigDecimal expected = MoneyRules.calculateAmount(line.getKilograms(), line.getRate());
+            if (line.getAmount() != null && !MoneyRules.amountsMatch(expected, line.getAmount())) {
+                throw new IllegalArgumentException(String.format(
+                        "Amount mismatch for customer %d: %s kg at rate %s is %s, but %s was submitted.",
+                        line.getCustomerId(), line.getKilograms(), line.getRate(),
+                        expected.toPlainString(), line.getAmount().toPlainString()));
+            }
+        }
+
+        MoneyRules.BirdReconciliation birds = MoneyRules.reconcileBirds(
+                dto.getTotalBirds(), soldBirds, dto.getMortality(), dto.getReturnToFarm());
+
+        if (!birds.isBalanced()) {
+            throw new IllegalArgumentException(String.format(
+                    "Bird count does not balance: %d loaded but %d accounted for (%s).",
+                    birds.getTotalBirds(), birds.getAccountedFor(), birds.getMessage()));
+        }
+    }
+
     @Transactional
     @Override
     public List<Sale> salesBulkEntry(SalesBulkEntryDto salesBulkEntryDto) {
         logger.info("Entering salesBulkEntry method with parameters: {}", salesBulkEntryDto);
         try {
+            validateBulkEntry(salesBulkEntryDto);
         	// Create or retrieve SaleDetails
             SaleDetails saleDetails = new SaleDetails();
             saleDetails.setDate(salesBulkEntryDto.getDate());
@@ -120,18 +166,17 @@ public class SalesServiceImpl implements SalesService {
            List<Sale> savedSales = saleRepository.saveAll(bulkSalesEntries);
             
             
-            //To update Balance amount
-             List<Map<String, Object>> salesDetails = salesBulkEntryDto.getSalesDetails();
-             salesDetails.forEach(map -> {
-            	 Integer pending =  (Integer) map.get("pending");
-            	// System.out.println("pending"+pending);
-            	 if(pending!=null)
-            	 {
-            		 Integer custIdInt = (Integer) map.get("customerId");
-            		 customerRepository.updateBalanceAmount(custIdInt, pending);
-            		 logger.info("Balance amount updated for customer Id : {} ", custIdInt);
-            	 }
-             });
+            // Update balances from the rows that were actually saved, not from
+            // the request: pending is recalculated server-side, so the client's
+            // figure is not necessarily what was stored.
+            for (Sale savedSale : savedSales) {
+                Integer pending = savedSale.getPending();
+                if (pending != null && pending != 0) {
+                    Long customerId = savedSale.getCustomer().getId();
+                    customerRepository.updateBalanceAmount(customerId, pending);
+                    logger.debug("Balance updated for customer id {} by {}", customerId, pending);
+                }
+            }
           // Create ledger entry (this will handle backdate recalculation automatically)
              for (Sale savedSale : savedSales) {
              ledgerService.createSaleLedgerEntry(savedSale);

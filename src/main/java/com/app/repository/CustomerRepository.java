@@ -19,7 +19,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
 	
 	@Modifying
     @Query("UPDATE Customer c SET c.balanceAmount = c.balanceAmount + :amount WHERE c.id = :customerId")
-    int updateBalanceAmount(@Param("customerId") Integer customerId, @Param("amount") Integer amount);
+    int updateBalanceAmount(@Param("customerId") Long customerId, @Param("amount") Integer amount);
 
 }
 
