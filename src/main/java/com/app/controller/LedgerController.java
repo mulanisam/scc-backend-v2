@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.app.dto.CustomerLedgerDTO;
+import com.app.dto.CustomerStatementDTO;
 import com.app.service.LedgerService;
 
 @RestController
@@ -46,5 +47,25 @@ public class LedgerController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("Failed to fetch ledger: " + e.getMessage());
         }
+    }
+
+    /**
+     * The same transactions presented as an account statement: customer identity,
+     * the balance brought forward into the period, each sale's birds, weight and
+     * rate, and the closing figures.
+     *
+     * No try/catch here - GlobalExceptionHandler turns a missing customer into a
+     * 404 and a reversed date range into a 400 carrying the message. The endpoint
+     * above swallows both into a 500, which is why the screen could only ever say
+     * "Failed to fetch ledger data".
+     */
+    @GetMapping("/customer/{customerId}/statement")
+    public ResponseEntity<CustomerStatementDTO> getCustomerStatement(
+            @PathVariable Long customerId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
+
+        logger.info("Statement requested for customer {}, {} to {}", customerId, startDate, endDate);
+        return ResponseEntity.ok(ledgerService.getCustomerStatement(customerId, startDate, endDate));
     }
 }

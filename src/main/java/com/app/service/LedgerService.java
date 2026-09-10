@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import com.app.dto.CustomerLedgerDTO;
+import com.app.dto.CustomerStatementDTO;
 import com.app.entity.Customer;
 import com.app.entity.CustomerLedger;
 import com.app.entity.Sale;
@@ -31,6 +32,14 @@ public interface LedgerService {
      * Get customer ledger entries with optional date range
      */
     List<CustomerLedgerDTO> getCustomerLedger(Long customerId, LocalDate startDate, LocalDate endDate);
+    
+    /**
+     * Assemble a full account statement: identity, period, balance brought
+     * forward, the transactions with their sale detail resolved, and the closing
+     * figures. getCustomerLedger returns only the rows in range, which is not
+     * enough to present a statement that stands on its own.
+     */
+    CustomerStatementDTO getCustomerStatement(Long customerId, LocalDate startDate, LocalDate endDate);
     
     /**
      * Get current balance for a customer from ledger

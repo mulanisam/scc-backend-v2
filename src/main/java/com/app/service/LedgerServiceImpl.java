@@ -1,27 +1,34 @@
 package com.app.service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.app.dto.CustomerLedgerDTO;
+import com.app.dto.CustomerStatementDTO;
+import com.app.dto.LedgerStatementTotals;
 import com.app.entity.Customer;
 import com.app.entity.CustomerLedger;
 import com.app.entity.CustomerLedger.TransactionType;
 import com.app.entity.CustomerPayment;
 import com.app.entity.Sale;
+import com.app.exception.ResourceNotFoundException;
 import com.app.repository.CustomerLedgerRepository;
 import com.app.repository.CustomerRepository;
+import com.app.repository.SaleRepository;
 import com.app.utility.MoneyRules;
 
 @Service
@@ -34,6 +41,9 @@ public class LedgerServiceImpl implements LedgerService {
 
     @Autowired
     private CustomerRepository customerRepository;
+
+    @Autowired
+    private SaleRepository saleRepository;
 
     @Override
     @Transactional
@@ -289,5 +299,146 @@ public class LedgerServiceImpl implements LedgerService {
         dto.setCreatedAt(ledger.getCreatedAt());
         dto.setBackdated(ledger.isBackdated());
         return dto;
+    }
+
+    // ---- statement -------------------------------------------------------
+
+    @Override
+    @Transactional(readOnly = true)
+    public CustomerStatementDTO getCustomerStatement(Long customerId, LocalDate startDate, LocalDate endDate) {
+        logger.info("Building statement for customer {} from {} to {}", customerId, startDate, endDate);
+
+        if (startDate != null && endDate != null && endDate.isBefore(startDate)) {
+            throw new IllegalArgumentException("End date " + endDate + " is before start date " + startDate + ".");
+        }
+
+        Customer customer = customerRepository.findById(customerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Customer " + customerId + " was not found."));
+
+        boolean ranged = startDate != null && endDate != null;
+        List<CustomerLedger> entries = ranged
+                ? ledgerRepository.findForStatement(customer, startDate, endDate)
+                : ledgerRepository.findAllForStatement(customer);
+
+        List<CustomerLedgerDTO> rows = entries.stream().map(this::convertToDTO).collect(Collectors.toList());
+        attachSaleDetail(rows);
+
+        CustomerStatementDTO statement = new CustomerStatementDTO();
+        statement.setCustomerId(customer.getId());
+        statement.setCustomerName(customer.getName());
+        statement.setShopName(customer.getShopName());
+        statement.setMobileNo(customer.getMobileNo());
+        statement.setAddress(customer.getAddress());
+        statement.setCityName(customer.getCity() == null ? null : customer.getCity().getName());
+        statement.setObsolete(customer.isObsolete());
+        statement.setCreditLimit(customer.getCreditLimit());
+        statement.setCreditLimitEnabled(customer.isCreditLimitEnabled());
+        statement.setStartDate(startDate);
+        statement.setEndDate(endDate);
+        statement.setEntries(rows);
+        statement.setGeneratedAt(LocalDateTime.now());
+
+        if (!entries.isEmpty()) {
+            statement.setFirstTransactionDate(entries.get(0).getTransactionDate());
+            statement.setLastTransactionDate(entries.get(entries.size() - 1).getTransactionDate());
+        }
+
+        BigDecimal openingBalance = ranged ? balanceBefore(customer, startDate) : MoneyRules.money(BigDecimal.ZERO);
+        statement.setOpeningBalance(openingBalance);
+        statement.setTotals(buildTotals(rows, openingBalance));
+        return statement;
+    }
+
+    /**
+     * Balance carried into the statement period: the running balance on the last
+     * row before startDate, which already accounts for the whole history behind
+     * it.
+     */
+    private BigDecimal balanceBefore(Customer customer, LocalDate startDate) {
+        List<CustomerLedger> previous = ledgerRepository.findLatestBefore(customer, startDate, Limit.of(1));
+        return previous.isEmpty()
+                ? MoneyRules.money(BigDecimal.ZERO)
+                : MoneyRules.money(previous.get(0).getRunningBalance());
+    }
+
+    /**
+     * Fills in birds, weight, rate, route, driver and vehicle on the SALE rows.
+     *
+     * A ledger row records money only, and the sale's quantities were readable
+     * just as prose inside the description ("Sale - 25 birds, 45.500 kg"), which
+     * cannot be aligned into columns or totalled. One batched lookup keyed by
+     * reference id avoids a query per row - a full history for an active customer
+     * runs to hundreds of sales.
+     */
+    private void attachSaleDetail(List<CustomerLedgerDTO> rows) {
+        List<Long> saleIds = rows.stream()
+                .filter(row -> row.getTransactionType() == TransactionType.SALE && row.getReferenceId() != null)
+                .map(CustomerLedgerDTO::getReferenceId)
+                .distinct()
+                .collect(Collectors.toList());
+
+        if (saleIds.isEmpty()) {
+            return;
+        }
+
+        Map<Long, Sale> sales = saleRepository.findAllById(saleIds).stream()
+                .collect(Collectors.toMap(Sale::getId, sale -> sale, (first, second) -> first));
+
+        for (CustomerLedgerDTO row : rows) {
+            Sale sale = row.getReferenceId() == null ? null : sales.get(row.getReferenceId());
+            if (sale == null) {
+                continue;
+            }
+            row.setBirds(sale.getBirds());
+            row.setWeight(sale.getKilograms() == null ? null : MoneyRules.weight(sale.getKilograms()));
+            row.setRate(sale.getRate());
+            row.setObsolete(sale.isObsolete());
+            row.setRouteName(sale.getRoute() == null ? null : sale.getRoute().getName());
+            row.setDriverName(sale.getDriver() == null ? null : sale.getDriver().getName());
+            row.setVehicleNo(sale.getVehicleNo() == null ? null : String.valueOf(sale.getVehicleNo()));
+        }
+    }
+
+    private LedgerStatementTotals buildTotals(List<CustomerLedgerDTO> rows, BigDecimal openingBalance) {
+        LedgerStatementTotals totals = new LedgerStatementTotals();
+        BigDecimal debit = BigDecimal.ZERO;
+        BigDecimal credit = BigDecimal.ZERO;
+        BigDecimal weight = BigDecimal.ZERO;
+        long birds = 0;
+
+        for (CustomerLedgerDTO row : rows) {
+            debit = debit.add(MoneyRules.money(row.getDebitAmount()));
+            credit = credit.add(MoneyRules.money(row.getCreditAmount()));
+
+            if (row.getTransactionType() == TransactionType.SALE) {
+                totals.setSaleCount(totals.getSaleCount() + 1);
+                birds += row.getBirds() == null ? 0 : row.getBirds();
+                weight = weight.add(MoneyRules.weight(row.getWeight()));
+            } else if (row.getTransactionType() == TransactionType.PAYMENT) {
+                totals.setPaymentCount(totals.getPaymentCount() + 1);
+            } else if (row.getTransactionType() != TransactionType.OPENING_BALANCE) {
+                totals.setAdjustmentCount(totals.getAdjustmentCount() + 1);
+            }
+        }
+
+        totals.setRowCount(rows.size());
+        totals.setTotalDebit(MoneyRules.money(debit));
+        totals.setTotalCredit(MoneyRules.money(credit));
+        totals.setNetMovement(MoneyRules.money(debit.subtract(credit)));
+        totals.setOpeningBalance(MoneyRules.money(openingBalance));
+        totals.setBirds(birds);
+        totals.setWeight(MoneyRules.weight(weight));
+        totals.setAverageRate(weight.signum() == 0
+                ? BigDecimal.ZERO.setScale(2)
+                : debit.divide(weight, 2, RoundingMode.HALF_UP));
+
+        // The closing balance is the last row's running balance rather than
+        // opening plus movement: an opening-balance row falling inside the period
+        // already carries a brought-forward figure, and reading the last row keeps
+        // the statement agreeing with the ledger wherever the two would differ.
+        totals.setClosingBalance(rows.isEmpty()
+                ? MoneyRules.money(openingBalance)
+                : MoneyRules.money(rows.get(rows.size() - 1).getRunningBalance()));
+        return totals;
     }
 }
