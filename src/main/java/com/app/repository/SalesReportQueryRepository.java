@@ -105,10 +105,14 @@ public class SalesReportQueryRepository {
 
         String bucket = period.bucketExpression("s.date");
 
+        ReportGroupBy groupBy2 = request.getGroupBy2();
+
         StringBuilder sql = new StringBuilder();
         sql.append("SELECT ").append(bucket).append(" AS period_start, ")
            .append(groupBy.idExpression()).append(" AS dim_id, ")
            .append(groupBy.nameExpression()).append(" AS dim_name, ")
+           .append(groupBy2.idExpression()).append(" AS dim2_id, ")
+           .append(groupBy2.nameExpression()).append(" AS dim2_name, ")
            .append("""
                    COUNT(*)                       AS txn_count,
                    COUNT(DISTINCT cust.id)        AS customer_count,
@@ -122,13 +126,12 @@ public class SalesReportQueryRepository {
         appendFilters(sql, request);
 
         sql.append(" GROUP BY period_start");
-        if (groupBy.isGrouped()) {
-            sql.append(", dim_id, dim_name");
-        }
+        if (groupBy.isGrouped())  sql.append(", dim_id, dim_name");
+        if (groupBy2.isGrouped()) sql.append(", dim2_id, dim2_name");
+
         sql.append(" ORDER BY period_start");
-        if (groupBy.isGrouped()) {
-            sql.append(", dim_name");
-        }
+        if (groupBy.isGrouped())  sql.append(", dim_name");
+        if (groupBy2.isGrouped()) sql.append(", dim2_name");
 
         Query query = entityManager.createNativeQuery(sql.toString());
         bindFilters(query, request);
@@ -142,13 +145,15 @@ public class SalesReportQueryRepository {
             row.setPeriodLabel(period.label(start, request.getStartDate(), request.getEndDate()));
             row.setDimensionId(toLong(r[1]));
             row.setDimensionName((String) r[2]);
-            row.setTransactionCount(toLong(r[3]) == null ? 0 : toLong(r[3]));
-            row.setCustomerCount(toLong(r[4]) == null ? 0 : toLong(r[4]));
-            row.setBirds(toLong(r[5]) == null ? 0 : toLong(r[5]));
-            row.setWeight(toBigDecimal(r[6]));
-            row.setAmount(toBigDecimal(r[7]));
-            row.setPayment(toBigDecimal(r[8]));
-            row.setPending(toBigDecimal(r[9]));
+            row.setDimension2Id(toLong(r[3]));
+            row.setDimension2Name((String) r[4]);
+            row.setTransactionCount(toLong(r[5]) == null ? 0 : toLong(r[5]));
+            row.setCustomerCount(toLong(r[6]) == null ? 0 : toLong(r[6]));
+            row.setBirds(toLong(r[7]) == null ? 0 : toLong(r[7]));
+            row.setWeight(toBigDecimal(r[8]));
+            row.setAmount(toBigDecimal(r[9]));
+            row.setPayment(toBigDecimal(r[10]));
+            row.setPending(toBigDecimal(r[11]));
             rows.add(row);
         }
         return rows;
@@ -191,24 +196,33 @@ public class SalesReportQueryRepository {
         return balances;
     }
 
-    /** Customer ids per dimension value, so group balances can be summed. */
-    public Map<Long, List<Long>> findCustomersByDimension(SalesReportRequest request) {
+    /**
+     * Customer ids per dimension bucket, so a group's closing balance can be
+     * summed from its members. Keyed "dim1Id|dim2Id" to match however the summary
+     * was grouped - a route+driver report needs the customers of that pairing,
+     * not of the route as a whole.
+     */
+    public Map<String, List<Long>> findCustomersByDimension(SalesReportRequest request) {
         ReportGroupBy groupBy = request.getGroupBy();
-        if (!groupBy.isGrouped()) {
+        ReportGroupBy groupBy2 = request.getGroupBy2();
+
+        if (!groupBy.isGrouped() && !groupBy2.isGrouped()) {
             return Map.of();
         }
 
         StringBuilder sql = new StringBuilder("SELECT DISTINCT ")
-                .append(groupBy.idExpression()).append(" AS dim_id, cust.id ");
+                .append(groupBy.idExpression()).append(" AS dim_id, ")
+                .append(groupBy2.idExpression()).append(" AS dim2_id, cust.id ");
         sql.append(FROM_SALES);
         appendFilters(sql, request);
 
         Query query = entityManager.createNativeQuery(sql.toString());
         bindFilters(query, request);
 
-        Map<Long, List<Long>> byDimension = new LinkedHashMap<>();
+        Map<String, List<Long>> byDimension = new LinkedHashMap<>();
         for (Object[] r : castRows(query.getResultList())) {
-            byDimension.computeIfAbsent(toLong(r[0]), k -> new ArrayList<>()).add(toLong(r[1]));
+            String key = toLong(r[0]) + "|" + toLong(r[1]);
+            byDimension.computeIfAbsent(key, k -> new ArrayList<>()).add(toLong(r[2]));
         }
         return byDimension;
     }

@@ -35,6 +35,12 @@ public class SalesReportRequest {
     /** Business dimension for summary reports. Defaults to no dimension. */
     private ReportGroupBy groupBy = ReportGroupBy.NONE;
 
+    /**
+     * Optional second dimension, so a summary can cross two of them - route AND
+     * driver, for instance, which a single groupBy cannot express.
+     */
+    private ReportGroupBy groupBy2 = ReportGroupBy.NONE;
+
     /** Exclude customers marked obsolete. Defaults to including everything. */
     private boolean excludeObsolete = false;
 
@@ -44,5 +50,9 @@ public class SalesReportRequest {
 
     public ReportGroupBy getGroupBy() {
         return groupBy == null ? ReportGroupBy.NONE : groupBy;
+    }
+
+    public ReportGroupBy getGroupBy2() {
+        return groupBy2 == null ? ReportGroupBy.NONE : groupBy2;
     }
 }

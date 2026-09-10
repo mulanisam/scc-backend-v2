@@ -58,4 +58,19 @@ public class SaleDetails extends AuditableEntity {
     private BigDecimal totalAmount;
     private BigDecimal totalPaymentReceived;
     private BigDecimal totalPending;
+
+    /**
+     * Weight loaded at the farm. Null for every trip recorded before this was
+     * captured, so weight loss is reported only where the figure is known.
+     */
+    private BigDecimal loadedKilograms;
+
+    /**
+     * Set when a trip corrects another rather than being a fresh entry. Such a
+     * trip legitimately shares its date, route, vehicle and driver with the one
+     * it corrects, which is why that combination carries no unique constraint.
+     */
+    private boolean isCorrection;
+
+    private String correctionNote;
 }

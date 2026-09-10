@@ -23,6 +23,10 @@ public class SalesSummaryRow {
     private Long dimensionId;
     private String dimensionName;
 
+    /** Second dimension, when the report crosses two of them. */
+    private Long dimension2Id;
+    private String dimension2Name;
+
     private long transactionCount;
     private long customerCount;
 

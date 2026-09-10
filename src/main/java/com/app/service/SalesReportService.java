@@ -69,7 +69,9 @@ public class SalesReportService {
         rows.forEach(row -> row.setAverageRate(averageRate(row.getAmount(), row.getWeight())));
 
         SalesReportResponse response = baseResponse(request,
-                request.getGroupBy().label() + " summary");
+                request.getGroupBy2().isGrouped()
+                        ? request.getGroupBy().label() + " and " + request.getGroupBy2().label() + " summary"
+                        : request.getGroupBy().label() + " summary");
         response.setSummary(rows);
         response.setTotals(totalsFromSummary(rows));
         return response;
@@ -90,8 +92,11 @@ public class SalesReportService {
 
         Map<String, BigDecimal> balances = reportRepository.findClosingBalances(request);
         ReportGroupBy groupBy = request.getGroupBy();
+        ReportGroupBy groupBy2 = request.getGroupBy2();
 
-        if (groupBy == ReportGroupBy.CUSTOMER) {
+        // A customer-grouped report reads the balance directly; anything else
+        // sums the balances of the customers in the bucket.
+        if (groupBy == ReportGroupBy.CUSTOMER && !groupBy2.isGrouped()) {
             for (SalesSummaryRow row : rows) {
                 row.setClosingBalance(MoneyRules.money(
                         balances.get(row.getPeriodStart() + "|" + row.getDimensionId())));
@@ -99,11 +104,13 @@ public class SalesReportService {
             return;
         }
 
-        Map<Long, List<Long>> customersByDimension = reportRepository.findCustomersByDimension(request);
+        Map<String, List<Long>> customersByDimension = reportRepository.findCustomersByDimension(request);
+        boolean grouped = groupBy.isGrouped() || groupBy2.isGrouped();
 
         for (SalesSummaryRow row : rows) {
-            List<Long> customerIds = groupBy.isGrouped()
-                    ? customersByDimension.getOrDefault(row.getDimensionId(), List.of())
+            List<Long> customerIds = grouped
+                    ? customersByDimension.getOrDefault(
+                            row.getDimensionId() + "|" + row.getDimension2Id(), List.of())
                     : customersByDimension.values().stream().flatMap(List::stream).distinct().toList();
 
             BigDecimal total = BigDecimal.ZERO;
@@ -123,7 +130,9 @@ public class SalesReportService {
         response.setStartDate(request.getStartDate());
         response.setEndDate(request.getEndDate());
         response.setPeriodLabel(request.getPeriod().name());
-        response.setGroupByLabel(request.getGroupBy().label());
+        response.setGroupByLabel(request.getGroupBy2().isGrouped()
+                ? request.getGroupBy().label() + " / " + request.getGroupBy2().label()
+                : request.getGroupBy().label());
         response.setAppliedFilters(describeFilters(request));
         return response;
     }

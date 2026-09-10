@@ -11,7 +11,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.app.dto.report.SalesReportRequest;
 import com.app.dto.report.SalesReportResponse;
+import com.app.dto.report.TripReconciliationResponse;
 import com.app.service.SalesReportService;
+import com.app.service.TripReconciliationService;
 
 import jakarta.validation.Valid;
 
@@ -34,6 +36,9 @@ public class SalesReportController {
 
     @Autowired
     private SalesReportService salesReportService;
+
+    @Autowired
+    private TripReconciliationService tripReconciliationService;
 
     /**
      * Transaction lines. Any combination of route, customer, driver, vehicle and
@@ -58,5 +63,20 @@ public class SalesReportController {
     public ResponseEntity<SalesReportResponse> summary(@Valid @RequestBody SalesReportRequest request) {
         logger.info("Summary report requested: {}", request);
         return ResponseEntity.ok(salesReportService.summaryReport(request));
+    }
+
+    /**
+     * Trip reconciliation: per vehicle load, the birds out and what became of
+     * them, weight and money back, what is still owed, and whether it balances.
+     *
+     * Reports real shrinkage separately from a header disagreeing with its own
+     * sale lines, because the two mean different things - one is a business loss,
+     * the other a data fault.
+     */
+    @PostMapping("/reconciliation")
+    public ResponseEntity<TripReconciliationResponse> reconciliation(
+            @Valid @RequestBody SalesReportRequest request) {
+        logger.info("Trip reconciliation requested: {}", request);
+        return ResponseEntity.ok(tripReconciliationService.reconcile(request));
     }
 }
