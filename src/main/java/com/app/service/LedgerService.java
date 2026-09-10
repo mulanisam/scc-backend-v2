@@ -22,7 +22,13 @@ public interface LedgerService {
      * Create ledger entry for a payment
      */
     CustomerLedger createPaymentLedgerEntry(CustomerPayment payment);
-    
+
+    /**
+     * Reverse a cancelled payment by posting a debit against it, which puts the
+     * debt back on the account and leaves both entries visible on the statement.
+     */
+    CustomerLedger reversePaymentLedgerEntry(CustomerPayment payment);
+
     /**
      * Create opening balance ledger entry
      */

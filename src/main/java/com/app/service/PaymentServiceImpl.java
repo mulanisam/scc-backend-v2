@@ -112,21 +112,39 @@ public class PaymentServiceImpl implements PaymentService {
                 .orElseThrow(() -> new ResourceNotFoundException("Payment not found with id: " + paymentId));
     }
 
+    /**
+     * Cancels a payment.
+     *
+     * The soft delete alone was not enough: it flagged the payment row and then
+     * called recalculateBalancesFromDate, which re-chains the ledger rows that
+     * exist - including the cancelled payment's credit. The debt stayed paid off
+     * and the statement still showed the receipt. Nothing had reached production
+     * because no payment has ever been recorded, but the path was wrong.
+     *
+     * A reversing entry is posted instead of deleting the credit, following the
+     * same rule already applied to trip corrections: the original stays and the
+     * correction sits beside it, so a statement shows what happened rather than
+     * quietly losing a receipt the customer was given.
+     */
     @Transactional
     @Override
     public void deletePayment(Long paymentId) {
-        logger.info("Deleting payment with ID: {}", paymentId);
-        
+        logger.info("Cancelling payment with ID: {}", paymentId);
+
         CustomerPayment payment = paymentRepository.findById(paymentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment not found with id: " + paymentId));
-        
-        // Soft delete
+
+        if (payment.isDeleted()) {
+            throw new IllegalStateException("Payment " + paymentId + " is already cancelled.");
+        }
+
         payment.setDeleted(true);
         paymentRepository.save(payment);
-        
-        // Recalculate balances from the payment date
-        ledgerService.recalculateBalancesFromDate(payment.getCustomer(), payment.getPaymentDate());
-        
-        logger.info("Payment {} soft deleted and balances recalculated", paymentId);
+
+        // Puts the debt back, and recalculates from the payment's own date so the
+        // reversal lands in the right place in the customer's history.
+        ledgerService.reversePaymentLedgerEntry(payment);
+
+        logger.info("Payment {} cancelled and reversed in the ledger", paymentId);
     }
 }

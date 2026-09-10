@@ -33,7 +33,6 @@ public class Sale extends AuditableEntity {
     private BigDecimal amount;
     private BigDecimal payment;
     private BigDecimal pending;
-    private BigDecimal balancePending;
     private String paymentMode;
     private String description;
     private boolean obsolete;

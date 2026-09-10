@@ -49,8 +49,21 @@ public class LedgerServiceImpl implements LedgerService {
     @Transactional
     public CustomerLedger createSaleLedgerEntry(Sale sale) {
         logger.info("Creating ledger entry for sale ID: {}", sale.getId());
-        
-        Customer customer = sale.getCustomer();
+
+        // Loaded rather than taken from the sale.
+        //
+        // On the bulk path SaleMapper builds each Sale with a stub Customer that
+        // carries nothing but an id, which is enough for the foreign key but not to
+        // be saved: customerRepository.save(stub) is a merge, and merging a stub
+        // copies its nulls over the real row - "Column 'city_id' cannot be null".
+        // The entityManager.clear() that used to sit at the end of salesBulkEntry
+        // was discarding that bad merge before it could flush, which is why the
+        // damage never appeared. With the clear() gone, the fix is to work with the
+        // managed entity.
+        Customer customer = customerRepository.findById(sale.getCustomer().getId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Customer " + sale.getCustomer().getId() + " was not found."));
+
         CustomerLedger ledger = new CustomerLedger();
         ledger.setCustomer(customer);
         ledger.setTransactionDate(sale.getDate());
@@ -195,16 +208,13 @@ public class LedgerServiceImpl implements LedgerService {
     public void recalculateBalancesFromDate(Customer customer, LocalDate fromDate) {
         logger.info("Recalculating balances for customer: {} from date: {}", customer.getId(), fromDate);
         
-        // Get the balance just before fromDate
-        List<CustomerLedger> entriesBeforeDate = ledgerRepository
-                .findByCustomerAndTransactionDateBetweenOrderByTransactionDateAsc(
-                        customer, LocalDate.of(1900, 1, 1), fromDate.minusDays(1));
-        
-        BigDecimal startingBalance = MoneyRules.money(BigDecimal.ZERO);
-        if (!entriesBeforeDate.isEmpty()) {
-            startingBalance = entriesBeforeDate.get(entriesBeforeDate.size() - 1).getRunningBalance();
-        }
-        
+        // The balance carried into fromDate. Read as a single indexed row: this
+        // previously loaded the customer's entire history back to 1900 and threw
+        // all but the last row away, and it runs once per sale line - a trip of
+        // 116 lines for yesterday's date loaded a customer's whole ledger 116
+        // times over. Customers here average 116 ledger rows and reach 499.
+        BigDecimal startingBalance = balanceBefore(customer, fromDate);
+
         // Get all entries from fromDate onwards
         List<CustomerLedger> entriesToRecalculate = ledgerRepository
                 .findByCustomerAndTransactionDateGreaterThanEqualOrderByTransactionDateAsc(customer, fromDate);
@@ -299,6 +309,49 @@ public class LedgerServiceImpl implements LedgerService {
         dto.setCreatedAt(ledger.getCreatedAt());
         dto.setBackdated(ledger.isBackdated());
         return dto;
+    }
+
+    /**
+     * Posts the reversal of a cancelled payment.
+     *
+     * A debit for the same amount on the same date, so the customer's balance
+     * returns to what it was and the statement shows the receipt followed by its
+     * cancellation. The pair nets to nothing, which is the point: a receipt that
+     * was issued and then withdrawn is a fact about the account, and deleting the
+     * credit outright would hide it.
+     */
+    @Override
+    @Transactional
+    public CustomerLedger reversePaymentLedgerEntry(CustomerPayment payment) {
+        Customer customer = payment.getCustomer();
+        BigDecimal amount = MoneyRules.money(payment.getAmount());
+
+        logger.info("Reversing payment {} of {} for customer {}",
+                payment.getId(), amount, customer.getId());
+
+        CustomerLedger reversal = new CustomerLedger();
+        reversal.setCustomer(customer);
+        reversal.setTransactionDate(payment.getPaymentDate());
+        reversal.setTransactionType(TransactionType.DEBIT_NOTE);
+        reversal.setReferenceType("PAYMENT_REVERSAL");
+        reversal.setReferenceId(payment.getId());
+        reversal.setDebitAmount(amount);
+        reversal.setCreditAmount(MoneyRules.money(BigDecimal.ZERO));
+        reversal.setPaymentMode(payment.getPaymentMode());
+        reversal.setDescription("Payment cancelled - reversal of receipt #" + payment.getId()
+                + (payment.getTransactionReference() == null
+                        ? "" : " (" + payment.getTransactionReference() + ")"));
+        reversal.setBackdated(payment.getPaymentDate().isBefore(LocalDate.now()));
+        // Set by the recalculation below; a placeholder keeps the column non-null
+        // for databases where it is declared so.
+        reversal.setRunningBalance(MoneyRules.money(BigDecimal.ZERO));
+
+        CustomerLedger saved = ledgerRepository.save(reversal);
+
+        // Re-chains from the payment's date, which both places the reversal
+        // correctly in history and updates the customer's balance.
+        recalculateBalancesFromDate(customer, payment.getPaymentDate());
+        return saved;
     }
 
     // ---- statement -------------------------------------------------------

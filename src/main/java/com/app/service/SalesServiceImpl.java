@@ -2,7 +2,9 @@ package com.app.service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -123,6 +125,55 @@ public class SalesServiceImpl implements SalesService {
         }
     }
 
+    /**
+     * Refuses the whole entry if any customer on it would go past their credit
+     * limit, before a single row is written.
+     *
+     * Called alongside validateBulkEntry and outside the try below, for the same
+     * reason: that block turns anything it catches into a plain RuntimeException,
+     * so a refusal raised inside it reached the operator as a 500 reading "Bulk
+     * sales entry failed" rather than the name of the customer who is over.
+     *
+     * Two things this has to get right that a per-line check would not. The lines
+     * are summed per customer first, because the same customer legitimately appears
+     * more than once on one trip - it has happened on 175 trips in this database -
+     * and checking each line against the opening balance alone would let two lines
+     * through that together breach the limit. And only customers who actually have
+     * a limit enabled are examined, so the common case adds one batched lookup.
+     */
+    private void enforceCreditLimits(SalesBulkEntryDto dto) {
+        Map<Long, BigDecimal> pendingByCustomer = new LinkedHashMap<>();
+        for (SaleLineDto line : dto.getSalesDetails()) {
+            // Derived the same way SaleMapper will derive it, so the check tests
+            // the figure that is about to be stored.
+            BigDecimal pending = MoneyRules.calculatePending(
+                    MoneyRules.calculateAmount(line.getKilograms(), line.getRate()),
+                    MoneyRules.money(line.getPayment()));
+            if (pending.signum() <= 0) {
+                continue;
+            }
+            pendingByCustomer.merge(line.getCustomerId(), pending, BigDecimal::add);
+        }
+        if (pendingByCustomer.isEmpty()) {
+            return;
+        }
+
+        for (Customer customer : customerRepository.findAllById(pendingByCustomer.keySet())) {
+            if (!customer.isCreditLimitEnabled() || customer.getCreditLimit() == null) {
+                continue;
+            }
+            BigDecimal additional = pendingByCustomer.get(customer.getId());
+            if (ledgerService.isCreditLimitExceeded(customer, additional)) {
+                throw new IllegalStateException(String.format(
+                        "%s has reached their credit limit: balance %s plus %s on this entry exceeds the limit of %s.",
+                        customer.getName(),
+                        ledgerService.getCurrentBalance(customer).toPlainString(),
+                        additional.toPlainString(),
+                        MoneyRules.money(customer.getCreditLimit()).toPlainString()));
+            }
+        }
+    }
+
     @Transactional
     @Override
     public List<Sale> salesBulkEntry(SalesBulkEntryDto salesBulkEntryDto) {
@@ -132,6 +183,7 @@ public class SalesServiceImpl implements SalesService {
         // RuntimeException and would otherwise turn these rejections into a 500
         // with no usable message for the operator.
         validateBulkEntry(salesBulkEntryDto);
+        enforceCreditLimits(salesBulkEntryDto);
 
         try {
         	// Create or retrieve SaleDetails
@@ -170,36 +222,21 @@ public class SalesServiceImpl implements SalesService {
                     salesBulkEntryDto.getRoute(),
                     salesBulkEntryDto.getDriver(),saleDetails
             );
-            for (Sale sale : bulkSalesEntries) {
-				Sale tempSale = saleRepository.findTopByCustomerIdOrderByIdDesc((Long)sale.getCustomer().getId());
-				BigDecimal tempBalPending;
-				if(tempSale!=null)
-					tempBalPending= MoneyRules.money(tempSale.getBalancePending());
-				else
-					tempBalPending=MoneyRules.money(BigDecimal.ZERO);
-				BigDecimal balPending= MoneyRules.money(sale.getPending());
-				sale.setBalancePending(MoneyRules.money(tempBalPending.add(balPending)));
-			}
-           List<Sale> savedSales = saleRepository.saveAll(bulkSalesEntries);
-            
-            
-            // Update balances from the rows that were actually saved, not from
-            // the request: pending is recalculated server-side, so the client's
-            // figure is not necessarily what was stored.
+            List<Sale> savedSales = saleRepository.saveAll(bulkSalesEntries);
+
+            // The ledger is the only thing that maintains the customer balance.
+            //
+            // This block used to also increment customer.balance_amount directly
+            // through updateBalanceAmount, and then createSaleLedgerEntry set the
+            // same column to an absolute figure derived from the ledger: two
+            // writers for one number, where which one won depended on flush order.
+            // The entityManager.clear() that used to close this block was there to
+            // survive that. The ledger's figure is the correct one, so the
+            // increment is gone rather than the two being kept in step.
             for (Sale savedSale : savedSales) {
-                BigDecimal pending = savedSale.getPending();
-                if (pending != null && pending.signum() != 0) {
-                    Long customerId = savedSale.getCustomer().getId();
-                    customerRepository.updateBalanceAmount(customerId, pending);
-                    logger.debug("Balance updated for customer id {} by {}", customerId, pending);
-                }
+                ledgerService.createSaleLedgerEntry(savedSale);
+                logger.debug("Ledger entry created for sale ID: {}", savedSale.getId());
             }
-          // Create ledger entry (this will handle backdate recalculation automatically)
-             for (Sale savedSale : savedSales) {
-             ledgerService.createSaleLedgerEntry(savedSale);
-             logger.info("Ledger entry created for sale ID: {}", savedSale.getId());
-             }
-             entityManager.clear(); // Add this line to synchronize
 
              if(salesBulkEntryDto.isSendSms()) {
              for (Sale sale : savedSales) {
@@ -227,9 +264,12 @@ public class SalesServiceImpl implements SalesService {
              saleRepository.saveAll(savedSales);
             logger.info("Bulk sales entry created successfully with {} records", savedSales.size());
             return savedSales;
-        } catch (IllegalArgumentException | ResourceNotFoundException e) {
+        } catch (IllegalArgumentException | IllegalStateException | ResourceNotFoundException e) {
             // Business rejections keep their type so the exception handler can
-            // report them as 400 with the message intact.
+            // report them as 400 with the message intact. IllegalStateException is
+            // in the list because that is what a credit-limit refusal throws, and
+            // without it the operator saw "Bulk sales entry failed" as a 500
+            // instead of being told which customer is over their limit.
             throw e;
         } catch (Exception e) {
             // The cause is preserved rather than flattened into a string, so the
@@ -293,12 +333,7 @@ public class SalesServiceImpl implements SalesService {
             sale.setDescription(saleDTO.getDescription());
             sale.setObsolete(false);
             sale.setSmsSent(false);
-            // Calculate balance pending (previous balance + current pending)
-            Sale previousSale = saleRepository.findTopByCustomerIdOrderByIdDesc(customer.getId());
-            BigDecimal previousBalancePending = (previousSale != null && previousSale.getBalancePending() != null) 
-                    ? previousSale.getBalancePending() : MoneyRules.money(BigDecimal.ZERO);
-            sale.setBalancePending(MoneyRules.money(previousBalancePending.add(pendingAmount)));
-            
+
             // Save the sale
             Sale savedSale = saleRepository.save(sale);
             logger.info("Sale saved with ID: {}", savedSale.getId());
