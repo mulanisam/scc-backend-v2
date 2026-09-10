@@ -67,14 +67,12 @@
 			<scope>test</scope>
 		</dependency>
 		
-		<dependency>
-    <groupId>mysql</groupId>
-    <artifactId>mysql-connector-java</artifactId>
-    <scope>runtime</scope>
-    <version>8.0.33</version>
-   </dependency>
-
-		
+		<!--
+		  The legacy mysql:mysql-connector-java artifact was declared here
+		  alongside com.mysql:mysql-connector-j above, putting two copies of the
+		  driver on the runtime classpath. The Boot-managed com.mysql artifact is
+		  the supported one, so the legacy declaration has been removed.
+		-->
 
 		<!-- https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-impl -->
 		<dependency>
@@ -108,6 +106,20 @@
 		<dependency>
 		  <groupId>org.springframework.boot</groupId>
 		  <artifactId>spring-boot-starter-aop</artifactId>
+		</dependency>
+
+		<!--
+		  Flyway owns the database schema. Versions come from the Spring Boot
+		  parent; flyway-mysql is a separate module because Flyway 10 split
+		  per-database support out of core.
+		-->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-mysql</artifactId>
 		</dependency>
 
 	</dependencies>
