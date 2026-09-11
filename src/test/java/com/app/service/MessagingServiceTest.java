@@ -89,7 +89,11 @@ class MessagingServiceTest {
     }
 
     private MessageOutbox enqueueFor(Customer target) {
-        return messagingService.enqueue(target, MessageType.DAILY_SALE_SUMMARY,
+        return enqueueFor(target, properties.getChannel());
+    }
+
+    private MessageOutbox enqueueFor(Customer target, Channel channel) {
+        return messagingService.enqueue(target, channel, MessageType.DAILY_SALE_SUMMARY,
                 LocalDate.parse("2026-09-09"), null, "vars", "body");
     }
 
@@ -102,7 +106,7 @@ class MessagingServiceTest {
         assertEquals("9975080207", message.getRecipientMobile());
         assertEquals("Javed Kureshi", message.getRecipientName());
         assertEquals(Channel.SMS, message.getChannel());
-        assertEquals("DAILY_SALE_SUMMARY:67:2026-09-09", message.getIdempotencyKey());
+        assertEquals("DAILY_SALE_SUMMARY:SMS:67:2026-09-09", message.getIdempotencyKey());
         assertEquals(0, message.getAttempts());
     }
 
@@ -112,7 +116,7 @@ class MessagingServiceTest {
         MessageOutbox first = new MessageOutbox();
         first.setId(1L);
         first.setStatus(Status.SENT);
-        when(outboxRepository.findByIdempotencyKey("DAILY_SALE_SUMMARY:67:2026-09-09"))
+        when(outboxRepository.findByIdempotencyKey("DAILY_SALE_SUMMARY:SMS:67:2026-09-09"))
                 .thenReturn(Optional.of(first));
 
         MessageOutbox result = enqueueFor(customer);

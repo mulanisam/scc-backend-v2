@@ -24,4 +24,6 @@ public class SingleSaleEntryDTO {
     private String paymentMode;
     private String description;
     private boolean sendWAmsg;
+    /** Independent of sendWAmsg - both can be requested for one sale. */
+    private boolean sendSms;
 }

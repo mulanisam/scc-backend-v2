@@ -191,7 +191,13 @@ public class SalesServiceImpl implements SalesService {
      * the sale is not waiting on an HTTP request and cannot be rolled back by a
      * messaging failure; the dispatcher picks the queue up afterwards.
      */
-    private void queueDailyMessages(List<Sale> sales, LocalDate date) {
+    private void queueDailyMessages(List<Sale> sales, LocalDate date,
+                                    boolean sendSms, boolean sendWhatsapp) {
+
+        if (!sendSms && !sendWhatsapp) {
+            return;
+        }
+
         Map<Long, List<Sale>> byCustomer = new LinkedHashMap<>();
         for (Sale sale : sales) {
             byCustomer.computeIfAbsent(sale.getCustomer().getId(), key -> new ArrayList<>()).add(sale);
@@ -218,18 +224,24 @@ public class SalesServiceImpl implements SalesService {
                 // The ledger's figure, which createSaleLedgerEntry has just written.
                 BigDecimal balance = MoneyRules.money(customer.getBalanceAmount());
 
-                // The message has to match the channel's approved template. The DLT
-                // template used for SMS takes three variables - name, date, balance -
-                // so the detailed seven-variable summary can only go over WhatsApp,
-                // and only once its own template is approved. Sending the wrong count
-                // is rejected by the provider.
-                SmsMessageBuilder.Message message = messagingService.currentChannel() == Channel.WHATSAPP
-                        ? SmsMessageBuilder.dailySaleSummary(
-                                customer.getName(), date, birds, kilograms, amount, paid, balance)
-                        : SmsMessageBuilder.dailyBalance(customer.getName(), date, balance);
+                // Both channels can be requested for the same entry, and each gets the
+                // message its own approved template takes: the DLT template for SMS
+                // has three variables - name, date, balance - while WhatsApp carries
+                // the day's detail in seven. Sending the wrong count is a rejection,
+                // so the two are built separately rather than shared.
+                if (sendSms) {
+                    SmsMessageBuilder.Message sms =
+                            SmsMessageBuilder.dailyBalance(customer.getName(), date, balance);
+                    messagingService.enqueue(customer, Channel.SMS, MessageType.DAILY_SALE_SUMMARY,
+                            date, null, sms.variables(), sms.body());
+                }
 
-                messagingService.enqueue(customer, MessageType.DAILY_SALE_SUMMARY, date,
-                        null, message.variables(), message.body());
+                if (sendWhatsapp) {
+                    SmsMessageBuilder.Message whatsapp = SmsMessageBuilder.dailySaleSummary(
+                            customer.getName(), date, birds, kilograms, amount, paid, balance);
+                    messagingService.enqueue(customer, Channel.WHATSAPP, MessageType.DAILY_SALE_SUMMARY,
+                            date, null, whatsapp.variables(), whatsapp.body());
+                }
 
                 entry.getValue().forEach(sale -> sale.setSmsSent(true));
 
@@ -306,9 +318,8 @@ public class SalesServiceImpl implements SalesService {
                 logger.debug("Ledger entry created for sale ID: {}", savedSale.getId());
             }
 
-            if (salesBulkEntryDto.isSendSms()) {
-                queueDailyMessages(savedSales, salesBulkEntryDto.getDate());
-            }
+            queueDailyMessages(savedSales, salesBulkEntryDto.getDate(),
+                    salesBulkEntryDto.isSendSms(), salesBulkEntryDto.isSendWhatsapp());
 
             saleRepository.saveAll(savedSales);
             logger.info("Bulk sales entry created successfully with {} records", savedSales.size());
@@ -392,11 +403,10 @@ public class SalesServiceImpl implements SalesService {
             logger.info("Ledger entry created for sale ID: {}", savedSale.getId());
             
             
-            // Same path as bulk entry: one message per customer for the day, queued
-            // rather than sent, so the outbox is the record either way.
-            if (saleDTO.isSendWAmsg()) {
-                queueDailyMessages(List.of(savedSale), saleDTO.getDate());
-            }
+            // Same path as bulk entry: one message per customer for the day, per
+            // requested channel, queued rather than sent.
+            queueDailyMessages(List.of(savedSale), saleDTO.getDate(),
+                    saleDTO.isSendSms(), saleDTO.isSendWAmsg());
 
             return savedSale;
             

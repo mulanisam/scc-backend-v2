@@ -1,5 +1,6 @@
 package com.app.service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -22,6 +23,7 @@ import com.app.entity.MessageOutbox.Status;
 import com.app.repository.MessageOutboxRepository;
 import com.app.service.Fast2SmsClient.SendResult;
 import com.app.utility.MobileNumberRules;
+import com.app.utility.SmsMessageBuilder;
 
 /**
  * Queues messages and sends them.
@@ -75,13 +77,14 @@ public class MessagingService {
      */
     @Transactional
     public MessageOutbox enqueue(Customer customer,
+                                 Channel channel,
                                  MessageType type,
                                  LocalDate referenceDate,
                                  String templateId,
                                  String variables,
                                  String bodyPreview) {
 
-        String key = idempotencyKey(type, customer.getId(), referenceDate);
+        String key = idempotencyKey(type, channel, customer.getId(), referenceDate);
 
         // The unique constraint is the real guarantee; this check keeps the ordinary
         // repeat - a dispatch re-run, a back-dated sale for a day already messaged -
@@ -91,8 +94,6 @@ public class MessagingService {
             logger.debug("Message {} already queued for customer {}", key, customer.getId());
             return existing.get();
         }
-
-        Channel channel = properties.getChannel();
 
         MessageOutbox message = new MessageOutbox();
         message.setCustomer(customer);
@@ -142,22 +143,85 @@ public class MessagingService {
         return null;
     }
 
-    /** "DAILY_SALE_SUMMARY:67:2026-09-09" - one message per type, per party, per period. */
-    public static String idempotencyKey(MessageType type, Long partyId, LocalDate referenceDate) {
-        return type.name() + ":" + partyId + ":" + (referenceDate == null ? "all" : referenceDate);
+    /**
+     * "DAILY_SALE_SUMMARY:WHATSAPP:67:2026-09-09" - one message per type, per
+     * channel, per party, per period.
+     *
+     * The channel is part of the key because a customer can legitimately be sent both
+     * an SMS and a WhatsApp message for the same day - the operator chooses per entry
+     * - and without it the second channel would be silently treated as a duplicate of
+     * the first and never queued.
+     */
+    public static String idempotencyKey(MessageType type, Channel channel, Long partyId, LocalDate referenceDate) {
+        return type.name() + ":" + channel.name() + ":" + partyId
+                + ":" + (referenceDate == null ? "all" : referenceDate);
+    }
+
+    /** The channel used when a caller does not name one, such as a test send. */
+    public Channel defaultChannel() {
+        return properties.getChannel();
     }
 
     /**
-     * The channel messages are currently queued on.
+     * Sends one message to a given number, immediately, and reports what happened.
      *
-     * Callers need this because the message itself differs by channel, and not
-     * cosmetically: the approved DLT template for SMS takes three variables - name,
-     * date, balance - while the detailed daily summary takes seven. Sending seven
-     * values to a three-variable template is rejected by the provider, so the caller
-     * has to build the message the channel's template expects.
+     * For proving the provider is configured - key, sender id, template, WhatsApp
+     * number - without waiting for a sale to be entered. It goes through the outbox
+     * like everything else, so the attempt is recorded and the provider's own reply
+     * is stored rather than only logged.
+     *
+     * Two deliberate differences from a real message. It ignores messaging.enabled,
+     * because the point of asking for a test is to actually send one. And its
+     * idempotency key carries a timestamp, so the same number can be tested twice -
+     * every other message type is keyed to a period precisely so that it cannot be.
+     *
+     * The number is still validated: a test that "succeeds" against a nine-digit
+     * number proves nothing.
      */
-    public Channel currentChannel() {
-        return properties.getChannel();
+    @Transactional
+    public MessageOutbox sendTestMessage(String mobileNo, String recipientName,
+                                         String templateId, Channel requestedChannel) {
+        MobileNumberRules.Status numberStatus = MobileNumberRules.classify(mobileNo);
+        if (numberStatus != MobileNumberRules.Status.VALID) {
+            throw new IllegalArgumentException("\"" + mobileNo + "\" cannot be used: "
+                    + MobileNumberRules.describe(numberStatus) + ".");
+        }
+        if (!properties.getFast2sms().isConfigured()) {
+            throw new IllegalStateException(
+                    "Fast2SMS is not configured. Set FAST2SMS_API_KEY in .env and restart.");
+        }
+
+        Channel channel = requestedChannel == null ? properties.getChannel() : requestedChannel;
+        String name = recipientName == null || recipientName.isBlank() ? "Test" : recipientName.trim();
+        LocalDate today = LocalDate.now();
+
+        // Three values, matching what the existing approved templates take on both
+        // channels. The detailed seven-variable summary needs its own template first.
+        SmsMessageBuilder.Message built = SmsMessageBuilder.dailyBalance(name, today, BigDecimal.ZERO);
+
+        MessageOutbox message = new MessageOutbox();
+        message.setRecipientName(name);
+        message.setRecipientMobile(MobileNumberRules.normalise(mobileNo));
+        message.setChannel(channel);
+        message.setMessageType(MessageType.DAILY_SALE_SUMMARY);
+        message.setIdempotencyKey("TEST:" + MobileNumberRules.normalise(mobileNo)
+                + ":" + System.currentTimeMillis());
+        message.setReferenceDate(today);
+        message.setTemplateId(templateId);
+        message.setVariables(built.variables());
+        message.setBodyPreview(built.body());
+
+        MessageOutbox saved = outboxRepository.save(message);
+        logger.warn("Sending a test {} message to {} - this bypasses messaging.enabled",
+                channel, saved.getRecipientMobile());
+
+        SendResult result = fast2SmsClient.send(saved);
+        if (result.accepted()) {
+            saved.markSent(result.messageId(), result.response());
+        } else {
+            saved.markFailed(result.error() + (result.response() == null ? "" : " | " + result.response()));
+        }
+        return outboxRepository.save(saved);
     }
 
     // ---- dispatch ---------------------------------------------------------

@@ -47,6 +47,12 @@ public class SalesBulkEntryDto {
     private BigDecimal totalAmount;
     private BigDecimal totalPaymentReceived;
     private BigDecimal totalPending;
+    /**
+     * The two channels are independent, and chosen per entry on the sales screen.
+     * A customer can be sent both: the SMS carries the balance, the WhatsApp message
+     * carries the day.
+     */
     private boolean sendSms;
+    private boolean sendWhatsapp;
     
 }
