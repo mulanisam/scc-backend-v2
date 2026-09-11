@@ -1,25 +1,63 @@
-# WhatsApp templates to submit to Fast2SMS
+# WhatsApp templates
 
 A business-initiated WhatsApp message can only use a pre-approved template. This is
-the text to submit, the variable order it expects, and what to set afterwards.
+what exists on the account, what each template takes, and what the application does
+while one is waiting for approval.
 
 Submit these as **utility**, not marketing. A sale receipt and an account statement
 are transactional: utility templates are cheaper per message and are not subject to
 marketing opt-out handling. Choosing the wrong category is the most common reason a
 template like this gets rejected or billed at the higher rate.
 
-Language: **Marathi (mr)**. The existing SMS is Marathi and customers read it; there
-is no reason to switch them to English now.
+Language: the templates are registered as **`en`** while carrying **Marathi** text.
+That is not an oversight - it is what the three existing approved templates do, and
+Meta accepts it. Matching them avoids introducing a second language code for no
+benefit.
 
 ---
 
-## 1. Daily sale summary — 8 variables
+Templates can be created through the API rather than the dashboard. The endpoints
+are under `POST /dev/whatsapp/{version}/{waba_id}/message_templates` - a text
+template, a media template (which is what a statement PDF needs), and a CTA template
+that adds buttons. `GET /dev/dlt_manager/whatsapp?type=template` lists what exists,
+and there are delete endpoints by id and by name.
+
+Account: WABA `25534564426242770`, phone_number_id `943210575552456`.
+
+---
+
+## 1. Daily sale summary — 8 variables — **SUBMITTED, awaiting approval**
+
+| | |
+|---|---|
+| `message_id` | **32340** — this is what the send API takes |
+| Meta `template_id` | 28406350239005466 |
+| Name | `daily_sale_summary` |
+| Variables | 8, confirmed by the provider's own `var_count` |
+| Category | UTILITY |
+| Status | **Pending** |
+
+Registered with:
+
+```bash
+curl -X POST "https://www.fast2sms.com/dev/whatsapp/v26.0/25534564426242770/message_templates" \
+  -H "Authorization: $FAST2SMS_API_KEY" -H "Content-Type: application/json" \
+  --data-binary @daily-template.json
+# {"id":"28406350239005466","status":"PENDING","category":"UTILITY"}
+```
+
+`FAST2SMS_WA_DAILY_TEMPLATE_ID=32340` is already set. Until Meta approves it, the
+daily WhatsApp message is queued and held with "WhatsApp template daily_sale_summary
+is not approved (Pending)" - the status is read from the provider, so nothing needs
+changing when it flips to Approved beyond `GET /admin/messaging/templates?refresh=true`
+to drop the cached list.
+
 
 The message a customer gets on a day they traded. One per customer per day, not one
 per line: a customer with two lines on one trip gets a single message with the day's
 totals.
 
-**Body to submit**
+**Body as registered**
 
 ```
 नमस्कार {{1}},
@@ -33,8 +71,12 @@ totals.
 
 एकूण शिल्लक: ₹{{8}}
 
-धन्यवाद!
+-सोहेल चिकन,माढा
 ```
+
+Plus a `PHONE_NUMBER` button reading **कॉल करा** to +918605030099, and the same
+`-सोहेल चिकन,माढा` sign-off - both copied from the two approved templates, so a
+customer receiving this recognises it as coming from the same place.
 
 **Variables, in order**
 
@@ -69,31 +111,42 @@ matched against its approved content, and the code this replaces sent plain numb
 and had them accepted. The grouped form appears in the stored preview, which is what
 support reads.
 
-**After approval**
+**What happens while it is Pending**
 
-Set the template id in `.env`:
+Nothing needs doing. The daily WhatsApp message is queued and held with the reason
+read from the provider:
 
 ```
-FAST2SMS_WA_DAILY_TEMPLATE_ID=<the new id>
+WhatsApp template daily_sale_summary is not approved (Pending)
 ```
 
-Until that is set, the daily WhatsApp message is queued and **skipped** with the
-reason "The 8-variable WhatsApp daily template is not approved yet." rather than
-being sent against the three-variable template, which would be rejected for every
-customer at once.
+When Meta approves it, call `GET /admin/messaging/templates?refresh=true` to drop the
+cached list and the same messages queue normally. The status is never hardcoded, so
+there is no second place to remember to change.
+
+Two guards sit in front of this, and both were proven by pointing the configuration
+at the wrong template on purpose:
+
+- the variable count is compared against the provider's own `var_count` - "Template
+  pending_balance takes 3 variables but 8 were supplied"
+- an unapproved template is refused by status, whatever its variable count
 
 ---
 
-## 2. Weekly statement — not yet built
+## 2. Weekly statement — possible, not yet built
 
-The statement PDF needs a template with a **document header**, which is a different
-shape from the two above. Confirm with Fast2SMS whether their WhatsApp endpoint
-supports document headers before designing it; their current API takes a message id
-and pipe-separated values, which looks text-only.
+Fast2SMS **does** support this, which was an open question:
 
-Whatever carries it, the PDF must not be exposed at a public URL - a statement holds
-a customer's balance. Upload it to get a media id, or use a signed, single-use,
-short-expiry link.
+- `POST /dev/whatsapp/{version}/{waba_id}/message_templates` with a media template
+  carries a document header
+- `Upload Media` returns a media id for the PDF, so the statement never needs a
+  public URL - which matters, because it holds a customer's balance
+- `Send Session Message` sends free-form text or media inside the 24-hour window
+  after a customer replies, with no template needed
+
+The blocker is not the provider. It is that the statement PDF is generated by jsPDF
+in the browser, so a weekly scheduled job on the server cannot produce one. That
+generator has to move server-side first - see the Stage C note in the plan.
 
 ---
 
@@ -104,7 +157,7 @@ short-expiry link.
 | SMS, balance only (DLT) | `195555` | 3: name, date, balance | In use |
 | WhatsApp, balance only | `12082` | 3: name, date, balance | Approved, used for test sends |
 | WhatsApp, payment receipt | `12083` | — | Defined, never used - no payment has been recorded yet |
-| WhatsApp, daily summary | — | 8, as above | **To submit** |
+| WhatsApp, daily summary | `32340` | 8, as above | **Pending** Meta approval |
 
 ---
 

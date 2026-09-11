@@ -1,0 +1,35 @@
+{
+  "name": "daily_sale_summary",
+  "language": "en",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "नमस्कार {{1}},\n\nदिनांक {{2}} चा व्यवहार:\nपक्षी: {{3}}\nवजन: {{4}} किलो\nदर: ₹{{5}} प्रति किलो\nरक्कम: ₹{{6}}\nजमा: ₹{{7}}\n\nएकूण शिल्लक: ₹{{8}}\n\n-सोहेल चिकन,माढा",
+      "example": {
+        "body_text": [
+          [
+            "Javed Kureshi",
+            "09-09-2026",
+            "24",
+            "61.5",
+            "88.46",
+            "5440",
+            "4000",
+            "307940"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "PHONE_NUMBER",
+          "text": "कॉल करा",
+          "phone_number": "+918605030099"
+        }
+      ]
+    }
+  ]
+}
