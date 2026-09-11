@@ -105,11 +105,18 @@ public class MessagingService {
         message.setMessageType(type);
         message.setIdempotencyKey(key);
         message.setReferenceDate(referenceDate);
-        message.setTemplateId(templateId);
         message.setVariables(variables);
         message.setBodyPreview(bodyPreview);
 
-        String refusal = refuse(customer, channel);
+        // The daily WhatsApp template is used when the caller did not name one.
+        String resolvedTemplate = templateId != null ? templateId
+                : (channel == Channel.WHATSAPP && type == MessageType.DAILY_SALE_SUMMARY
+                        && properties.getFast2sms().hasWhatsappDailyTemplate()
+                                ? properties.getFast2sms().getWhatsappDailyTemplateId()
+                                : null);
+        message.setTemplateId(resolvedTemplate);
+
+        String refusal = refuse(customer, channel, type, resolvedTemplate);
         if (refusal != null) {
             message.markSkipped(refusal);
             logger.info("Not messaging {} ({}): {}", customer.getName(), customer.getId(), refusal);
@@ -127,7 +134,7 @@ public class MessagingService {
      * honoured, and a statement carrying a balance is not something to send to
      * somebody who never asked for it.
      */
-    private String refuse(Customer customer, Channel channel) {
+    private String refuse(Customer customer, Channel channel, MessageType type, String templateId) {
         MobileNumberRules.Status numberStatus = MobileNumberRules.classify(customer.getMobileNo());
         if (numberStatus != MobileNumberRules.Status.VALID) {
             return MobileNumberRules.describe(numberStatus);
@@ -138,6 +145,16 @@ public class MessagingService {
             }
             if (customer.getWhatsappOptInAt() == null) {
                 return "Customer has not opted in to WhatsApp messages";
+            }
+            // The daily summary carries eight variables and needs its own approved
+            // template. Without one there is nothing to send it against, and
+            // falling back to the three-variable template would be rejected for
+            // every customer - so it is held with a reason instead.
+            if (type == MessageType.DAILY_SALE_SUMMARY
+                    && (templateId == null || templateId.isBlank())
+                    && !properties.getFast2sms().hasWhatsappDailyTemplate()) {
+                return "The 8-variable WhatsApp daily template is not approved yet."
+                        + " Set FAST2SMS_WA_DAILY_TEMPLATE_ID once it is.";
             }
         }
         return null;

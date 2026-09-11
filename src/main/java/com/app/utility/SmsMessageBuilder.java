@@ -53,11 +53,30 @@ public final class SmsMessageBuilder {
     }
 
     /**
-     * The detailed daily summary: what was supplied, what was paid, what is owed.
+     * The daily WhatsApp message: the whole transaction, in the order a trader
+     * checks it.
      *
-     * Needs its own WhatsApp template approved before it can go out - the body here
-     * is what that template has to say. Written now so a dry run records the intended
-     * message, which is how the wording gets checked before 358 customers read it.
+     * Eight variables, each a figure the customer would otherwise ring up to ask
+     * about:
+     *
+     *   {{1}} name        {{5}} rate per kg
+     *   {{2}} date        {{6}} amount billed
+     *   {{3}} birds       {{7}} paid today
+     *   {{4}} weight      {{8}} total balance
+     *
+     * The rate is the addition that matters. It is the number a poultry trader
+     * checks first - it moves daily and it is what an argument is usually about -
+     * and it was missing from the earlier draft, which listed weight and amount and
+     * left the customer to divide one by the other. It is derived here rather than
+     * passed in, so it always equals amount over weight as billed and cannot
+     * disagree with the two figures printed beside it.
+     *
+     * Paid and balance are both present because they answer different questions:
+     * what was settled today, and what is still owed altogether. A customer seeing
+     * only the balance cannot tell whether today's payment was recorded.
+     *
+     * This needs its own approved WhatsApp template - the existing one takes three
+     * variables. docs/whatsapp-templates.md holds the text to submit.
      */
     public static Message dailySaleSummary(String customerName,
                                            LocalDate date,
@@ -68,6 +87,7 @@ public final class SmsMessageBuilder {
                                            BigDecimal balance) {
 
         String formattedDate = date.format(DATE);
+        BigDecimal ratePerKg = ratePerKg(amount, kilograms);
 
         return new Message(
                 String.join("|",
@@ -75,18 +95,48 @@ public final class SmsMessageBuilder {
                         formattedDate,
                         String.valueOf(birds),
                         weight(kilograms),
+                        rate(ratePerKg),
                         plain(amount),
                         plain(paid),
                         plain(balance)),
                 String.format(
                         "नमस्कार %s,%n"
-                                + "दिनांक %s%n"
-                                + "पक्षी: %d, वजन: %s किलो%n"
-                                + "रक्कम: ₹%s, जमा: ₹%s%n"
+                                + "%n"
+                                + "दिनांक %s चा व्यवहार:%n"
+                                + "पक्षी: %d%n"
+                                + "वजन: %s किलो%n"
+                                + "दर: ₹%s प्रति किलो%n"
+                                + "रक्कम: ₹%s%n"
+                                + "जमा: ₹%s%n"
+                                + "%n"
                                 + "एकूण शिल्लक: ₹%s%n"
+                                + "%n"
                                 + "धन्यवाद!",
                         safe(customerName), formattedDate, birds,
-                        weight(kilograms), money(amount), money(paid), money(balance)));
+                        weight(kilograms), rate(ratePerKg),
+                        money(amount), money(paid), money(balance)));
+    }
+
+    /**
+     * Realised rate: amount billed over weight sold.
+     *
+     * Derived rather than taken from the sale rows, because a customer with two
+     * lines on one trip may have been billed at two different rates, and the one
+     * figure that is true of the day as a whole is the total over the total. Zero
+     * weight yields zero instead of an error - a line can be recorded with no
+     * weight, and 3,691 trips in this data have no loaded weight at all.
+     */
+    static BigDecimal ratePerKg(BigDecimal amount, BigDecimal kilograms) {
+        if (kilograms == null || kilograms.signum() == 0) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+        return (amount == null ? BigDecimal.ZERO : amount)
+                .divide(kilograms, 2, RoundingMode.HALF_UP);
+    }
+
+    /** 152.25 - two decimals, no separators, for a rate. */
+    static String rate(BigDecimal value) {
+        return (value == null ? BigDecimal.ZERO : value).setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 
     /** 307940 - whole rupees, no separators, for a template variable. */

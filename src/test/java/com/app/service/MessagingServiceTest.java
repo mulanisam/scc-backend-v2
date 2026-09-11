@@ -72,6 +72,9 @@ class MessagingServiceTest {
         properties.setMaxAttempts(3);
         properties.setBatchSize(50);
         properties.getFast2sms().setApiKey("test-key");
+        // Approved, so the consent tests below exercise consent rather than the
+        // missing-template gate. That gate has its own test.
+        properties.getFast2sms().setWhatsappDailyTemplateId("12099");
 
         // Field injection, so the properties object has to be placed by hand.
         org.springframework.test.util.ReflectionTestUtils
@@ -169,6 +172,33 @@ class MessagingServiceTest {
         properties.setChannel(Channel.SMS);
         customer.setWhatsappOptOut(true);
         customer.setWhatsappOptInAt(null);
+        assertEquals(Status.PENDING, enqueueFor(customer).getStatus());
+    }
+
+    @Test
+    @DisplayName("without an approved 8-variable template the WhatsApp message is held, not sent")
+    void heldUntilTheDailyTemplateIsApproved() {
+        properties.setChannel(Channel.WHATSAPP);
+        properties.getFast2sms().setWhatsappDailyTemplateId(null);
+        customer.setWhatsappOptInAt(LocalDateTime.now());
+
+        MessageOutbox held = enqueueFor(customer);
+
+        // Falling back to the 3-variable template would be rejected by the provider
+        // for every customer at once. Held with a reason is the honest outcome.
+        assertEquals(Status.SKIPPED, held.getStatus());
+        assertTrue(held.getSkipReason().contains("8-variable"), held.getSkipReason());
+        assertTrue(held.getSkipReason().contains("FAST2SMS_WA_DAILY_TEMPLATE_ID"), held.getSkipReason());
+
+        // Once it is approved and configured, the same message queues.
+        properties.getFast2sms().setWhatsappDailyTemplateId("12099");
+        MessageOutbox queued = enqueueFor(customer);
+        assertEquals(Status.PENDING, queued.getStatus());
+        assertEquals("12099", queued.getTemplateId());
+
+        // SMS is unaffected - it has its own approved template and always did.
+        properties.setChannel(Channel.SMS);
+        properties.getFast2sms().setWhatsappDailyTemplateId(null);
         assertEquals(Status.PENDING, enqueueFor(customer).getStatus());
     }
 

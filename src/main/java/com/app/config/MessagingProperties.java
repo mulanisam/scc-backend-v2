@@ -65,6 +65,21 @@ public class MessagingProperties {
         private String whatsappSaleTemplateId = "12082";
         private String whatsappPaymentTemplateId = "12083";
 
+        /**
+         * The eight-variable daily summary template.
+         *
+         * Deliberately blank until it is approved, and separate from
+         * whatsappSaleTemplateId, which takes three. Sending eight values to a
+         * three-variable template is a rejection, so an unset id means the daily
+         * WhatsApp message is queued and skipped with a reason rather than sent
+         * against the wrong template and quietly failing for every customer.
+         */
+        private String whatsappDailyTemplateId;
+
+        public boolean hasWhatsappDailyTemplate() {
+            return whatsappDailyTemplateId != null && !whatsappDailyTemplateId.isBlank();
+        }
+
         public boolean isConfigured() {
             return apiKey != null && !apiKey.isBlank();
         }

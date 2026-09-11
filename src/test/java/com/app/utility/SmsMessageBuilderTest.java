@@ -50,21 +50,48 @@ class SmsMessageBuilderTest {
     }
 
     @Test
-    @DisplayName("the WhatsApp summary carries seven values, and the day's detail")
+    @DisplayName("the WhatsApp summary carries eight values, including the rate")
     void dailySaleSummaryCarriesTheDetail() {
         SmsMessageBuilder.Message message = SmsMessageBuilder.dailySaleSummary(
                 "Mainuddin Kazi", DATE, 15,
                 new BigDecimal("30.000"), new BigDecimal("3000.00"),
                 new BigDecimal("500.00"), new BigDecimal("2500.00"));
 
-        assertEquals("Mainuddin Kazi|09-09-2026|15|30.0|3000|500|2500", message.variables());
-        // Seven, against the three the SMS template takes - which is why the channel
-        // decides which builder is used.
-        assertEquals(7, message.variables().split("\\|", -1).length);
+        // name | date | birds | weight | rate | amount | paid | balance
+        assertEquals("Mainuddin Kazi|09-09-2026|15|30.0|100.00|3000|500|2500", message.variables());
+        // Eight, against the three the SMS template takes - which is why the channel
+        // decides which builder is used, and why this needs its own template.
+        assertEquals(8, message.variables().split("\\|", -1).length);
 
         assertTrue(message.body().contains("पक्षी: 15"), message.body());
-        assertTrue(message.body().contains("वजन: 30.0"), message.body());
-        assertTrue(message.body().contains("₹2,500"), message.body());
+        assertTrue(message.body().contains("वजन: 30.0 किलो"), message.body());
+        assertTrue(message.body().contains("दर: ₹100.00 प्रति किलो"), message.body());
+        assertTrue(message.body().contains("रक्कम: ₹3,000"), message.body());
+        assertTrue(message.body().contains("जमा: ₹500"), message.body());
+        assertTrue(message.body().contains("एकूण शिल्लक: ₹2,500"), message.body());
+    }
+
+    @Test
+    @DisplayName("the rate is derived from the day's totals, not from a single line")
+    void rateIsTheDaysRealisedRate() {
+        // A customer billed at two different rates on one trip has no single line
+        // rate; the figure true of the day is the total over the total. 45 kg for
+        // 5,000 is 111.11 per kg, and it has to agree with the two numbers printed
+        // beside it or the message invites an argument.
+        assertEquals(new BigDecimal("111.11"),
+                SmsMessageBuilder.ratePerKg(new BigDecimal("5000"), new BigDecimal("45.000")));
+
+        // No weight recorded - 3,691 trips in this data have none - yields zero
+        // rather than a division by zero in a customer's message.
+        assertEquals(new BigDecimal("0.00"),
+                SmsMessageBuilder.ratePerKg(new BigDecimal("5000"), BigDecimal.ZERO));
+        assertEquals(new BigDecimal("0.00"),
+                SmsMessageBuilder.ratePerKg(new BigDecimal("5000"), null));
+
+        SmsMessageBuilder.Message message = SmsMessageBuilder.dailySaleSummary(
+                "Test", DATE, 10, BigDecimal.ZERO, new BigDecimal("1000"),
+                BigDecimal.ZERO, new BigDecimal("1000"));
+        assertTrue(message.variables().contains("|0.00|"), message.variables());
     }
 
     @Test
@@ -98,6 +125,6 @@ class SmsMessageBuilderTest {
         SmsMessageBuilder.Message message = SmsMessageBuilder.dailySaleSummary(
                 null, DATE, 0, null, null, null, null);
 
-        assertEquals("|09-09-2026|0|0.0|0|0|0", message.variables());
+        assertEquals("|09-09-2026|0|0.0|0.00|0|0|0", message.variables());
     }
 }
