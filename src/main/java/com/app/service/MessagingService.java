@@ -22,6 +22,7 @@ import com.app.entity.MessageOutbox.MessageType;
 import com.app.entity.MessageOutbox.Status;
 import com.app.repository.MessageOutboxRepository;
 import com.app.service.Fast2SmsClient.SendResult;
+import com.app.dto.messaging.WhatsAppTemplate;
 import com.app.utility.MobileNumberRules;
 import com.app.utility.SmsMessageBuilder;
 
@@ -108,15 +109,16 @@ public class MessagingService {
         message.setVariables(variables);
         message.setBodyPreview(bodyPreview);
 
-        // The daily WhatsApp template is used when the caller did not name one.
-        String resolvedTemplate = templateId != null ? templateId
-                : (channel == Channel.WHATSAPP && type == MessageType.DAILY_SALE_SUMMARY
-                        && properties.getFast2sms().hasWhatsappDailyTemplate()
-                                ? properties.getFast2sms().getWhatsappDailyTemplateId()
-                                : null);
+        String resolvedTemplate = resolveTemplateId(channel, type, templateId);
         message.setTemplateId(resolvedTemplate);
 
         String refusal = refuse(customer, channel, type, resolvedTemplate);
+        // Only worth asking the template when nothing else has already stopped the
+        // message, and it rewrites the preview to the approved wording as a
+        // side effect.
+        if (refusal == null) {
+            refusal = checkAgainstTemplate(message);
+        }
         if (refusal != null) {
             message.markSkipped(refusal);
             logger.info("Not messaging {} ({}): {}", customer.getName(), customer.getId(), refusal);
@@ -147,11 +149,15 @@ public class MessagingService {
                 return "Customer has not opted in to WhatsApp messages";
             }
             // The daily summary carries eight variables and needs its own approved
-            // template. Without one there is nothing to send it against, and
-            // falling back to the three-variable template would be rejected for
-            // every customer - so it is held with a reason instead.
+            // template. Without one, resolveTemplateId falls back to the
+            // three-variable pending_balance template, which would be rejected for
+            // every customer at once - so it is held with a reason instead.
+            //
+            // checkAgainstTemplate would also catch this, and with a better message,
+            // because it compares against the provider's own var_count. This stays as
+            // the guard for when that list cannot be reached: a template mismatch is
+            // not something to discover one rejection per customer.
             if (type == MessageType.DAILY_SALE_SUMMARY
-                    && (templateId == null || templateId.isBlank())
                     && !properties.getFast2sms().hasWhatsappDailyTemplate()) {
                 return "The 8-variable WhatsApp daily template is not approved yet."
                         + " Set FAST2SMS_WA_DAILY_TEMPLATE_ID once it is.";
@@ -177,6 +183,118 @@ public class MessagingService {
     /** The channel used when a caller does not name one, such as a test send. */
     public Channel defaultChannel() {
         return properties.getChannel();
+    }
+
+    /**
+     * Which provider template will carry this message, decided when it is queued.
+     *
+     * Resolved here rather than left to the client at send time. The client does fall
+     * back to a configured default, but a row whose template_id is null cannot say
+     * afterwards what the customer was sent, and the preview cannot be rendered from
+     * a template nobody recorded - which is exactly how a test send came to store one
+     * wording while the recipient read another.
+     */
+    private String resolveTemplateId(Channel channel, MessageType type, String explicit) {
+        if (explicit != null && !explicit.isBlank()) {
+            return explicit;
+        }
+        MessagingProperties.Fast2Sms config = properties.getFast2sms();
+
+        if (channel == Channel.SMS) {
+            return config.getSmsTemplateId();
+        }
+
+        switch (type) {
+            case DAILY_SALE_SUMMARY:
+                // The eight-variable template when it exists; otherwise the
+                // three-variable one, which the balance-only message fits.
+                return config.hasWhatsappDailyTemplate()
+                        ? config.getWhatsappDailyTemplateId()
+                        : config.getWhatsappSaleTemplateId();
+            case PAYMENT_RECEIPT:
+                return config.getWhatsappPaymentTemplateId();
+            default:
+                return config.getWhatsappSaleTemplateId();
+        }
+    }
+
+    // ---- templates --------------------------------------------------------
+
+    /**
+     * The WhatsApp templates on the account, cached for the process.
+     *
+     * Cached because it is consulted on every WhatsApp message to check the variable
+     * count and to render the preview, and templates change about once a month.
+     * refreshTemplates() clears it after one is approved.
+     */
+    private volatile List<WhatsAppTemplate> templateCache;
+
+    public List<WhatsAppTemplate> whatsappTemplates() {
+        List<WhatsAppTemplate> cached = templateCache;
+        if (cached == null) {
+            cached = fast2SmsClient.fetchTemplates();
+            templateCache = cached;
+        }
+        return cached;
+    }
+
+    public List<WhatsAppTemplate> refreshTemplates() {
+        templateCache = fast2SmsClient.fetchTemplates();
+        return templateCache;
+    }
+
+    private Optional<WhatsAppTemplate> templateByMessageId(String messageId) {
+        if (messageId == null || messageId.isBlank()) {
+            return Optional.empty();
+        }
+        return whatsappTemplates().stream()
+                .filter(template -> messageId.equals(String.valueOf(template.getMessageId())))
+                .findFirst();
+    }
+
+    /**
+     * Checks the values against the template that will carry them, and renders the
+     * preview from the approved body.
+     *
+     * Both halves were wrong before this existed. The variable count was never
+     * checked, so an eight-value message against a three-variable template would
+     * have been rejected once per customer with nothing to explain why. And the
+     * preview stored on the outbox row was the application's own wording, not the
+     * template's - for 12082 those are entirely different sentences, so the record of
+     * what a customer had been sent described a message that was never sent.
+     *
+     * @return a refusal reason, or null when the message can go
+     */
+    private String checkAgainstTemplate(MessageOutbox message) {
+        if (message.getChannel() != Channel.WHATSAPP) {
+            return null;
+        }
+
+        Optional<WhatsAppTemplate> found = templateByMessageId(message.getTemplateId());
+        if (found.isEmpty()) {
+            // Not fatal: the provider is the authority, and the list may be
+            // unreachable. The send is attempted and its own reply recorded.
+            logger.debug("No local record of WhatsApp template {}", message.getTemplateId());
+            return null;
+        }
+
+        WhatsAppTemplate template = found.get();
+        if (!template.isApproved()) {
+            return "WhatsApp template " + template.getTemplateName()
+                    + " is not approved (" + template.getStatus() + ")";
+        }
+
+        int supplied = message.getVariables() == null ? 0 : message.getVariables().split("\\|", -1).length;
+        int expected = template.getVarCount() == null ? template.placeholderCount() : template.getVarCount();
+
+        if (expected > 0 && supplied != expected) {
+            return "Template " + template.getTemplateName() + " takes " + expected
+                    + " variables but " + supplied + " were supplied";
+        }
+
+        // The preview becomes what the customer will actually read.
+        message.setBodyPreview(template.render(message.getVariables()));
+        return null;
     }
 
     /**
@@ -224,9 +342,13 @@ public class MessagingService {
         message.setIdempotencyKey("TEST:" + MobileNumberRules.normalise(mobileNo)
                 + ":" + System.currentTimeMillis());
         message.setReferenceDate(today);
-        message.setTemplateId(templateId);
+        message.setTemplateId(resolveTemplateId(channel, MessageType.DAILY_SALE_SUMMARY, templateId));
         message.setVariables(built.variables());
         message.setBodyPreview(built.body());
+
+        // Renders the preview from the approved template, so the record says what the
+        // recipient actually read rather than what this code would have written.
+        checkAgainstTemplate(message);
 
         MessageOutbox saved = outboxRepository.save(message);
         logger.warn("Sending a test {} message to {} - this bypasses messaging.enabled",

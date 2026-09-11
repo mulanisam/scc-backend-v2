@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.app.dto.messaging.WhatsAppTemplate;
 import com.app.entity.MessageOutbox;
 import com.app.entity.MessageOutbox.Channel;
 import com.app.repository.MessageOutboxRepository;
@@ -74,6 +75,25 @@ public class MessagingController {
                 "body", String.valueOf(result.getBodyPreview()),
                 "providerResponse", String.valueOf(result.getProviderResponse()),
                 "error", String.valueOf(result.getError())));
+    }
+
+    /**
+     * The WhatsApp templates that actually exist on the Fast2SMS account, with the
+     * variable count, category and approval status of each.
+     *
+     * Worth having in the app rather than only in the provider's dashboard, because
+     * the variable count is what decides whether a message can be sent at all: the
+     * daily summary carries eight values and the approved templates take three, three
+     * and one.
+     *
+     * @param refresh true after approving a template, to drop the cached list
+     */
+    @GetMapping("/templates")
+    public ResponseEntity<List<WhatsAppTemplate>> templates(
+            @RequestParam(defaultValue = "false") boolean refresh) {
+        return ResponseEntity.ok(refresh
+                ? messagingService.refreshTemplates()
+                : messagingService.whatsappTemplates());
     }
 
     /** The most recent messages, whatever their outcome. For a morning check. */

@@ -8,6 +8,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +19,9 @@ import org.springframework.stereotype.Service;
 import com.app.config.MessagingProperties;
 import com.app.entity.MessageOutbox;
 import com.app.entity.MessageOutbox.Channel;
+import com.app.dto.messaging.WhatsAppTemplate;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Talks to Fast2SMS. Nothing else in the application knows the provider exists.
@@ -36,9 +41,12 @@ public class Fast2SmsClient {
 
     private static final String SMS_ENDPOINT = "https://www.fast2sms.com/dev/bulkV2";
     private static final String WHATSAPP_ENDPOINT = "https://www.fast2sms.com/dev/whatsapp";
+    private static final String TEMPLATES_ENDPOINT = "https://www.fast2sms.com/dev/dlt_manager/whatsapp";
 
     @Autowired
     private MessagingProperties properties;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
@@ -105,6 +113,87 @@ public class Fast2SmsClient {
             logger.error("Fast2SMS send failed for outbox {}", message.getId(), e);
             return SendResult.rejected(e.getClass().getSimpleName() + ": " + e.getMessage(), null);
         }
+    }
+
+    /**
+     * The WhatsApp templates that actually exist on the account.
+     *
+     * GET /dev/dlt_manager/whatsapp?type=template. Worth reading rather than
+     * assuming: the account holds three approved templates taking 3, 3 and 1
+     * variables, all UTILITY, all carrying Marathi text under an "en" language tag,
+     * and two of them with a call button. None of that was knowable from the
+     * constants the code used to carry.
+     *
+     * Returns an empty list rather than throwing - this is used to check and display
+     * configuration, and a provider outage should not stop the application.
+     */
+    public List<WhatsAppTemplate> fetchTemplates() {
+        MessagingProperties.Fast2Sms config = properties.getFast2sms();
+        if (!config.isConfigured()) {
+            logger.warn("Cannot list WhatsApp templates: FAST2SMS_API_KEY is not set");
+            return List.of();
+        }
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(TEMPLATES_ENDPOINT + "?type=template"))
+                    .timeout(Duration.ofSeconds(30))
+                    // This endpoint takes the key as a header, unlike the send
+                    // endpoints, which take it as a query parameter.
+                    .header("Authorization", config.getApiKey())
+                    .header("accept", "application/json")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                logger.warn("Listing WhatsApp templates returned HTTP {}", response.statusCode());
+                return List.of();
+            }
+            return parseTemplates(response.body());
+
+        } catch (IOException e) {
+            logger.warn("Could not list WhatsApp templates: {}", e.getMessage());
+            return List.of();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return List.of();
+        } catch (RuntimeException e) {
+            logger.error("Could not parse the WhatsApp template list", e);
+            return List.of();
+        }
+    }
+
+    private List<WhatsAppTemplate> parseTemplates(String body) throws IOException {
+        List<WhatsAppTemplate> templates = new ArrayList<>();
+        JsonNode root = objectMapper.readTree(body);
+
+        for (JsonNode account : root.path("data")) {
+            for (JsonNode node : account.path("templates")) {
+                WhatsAppTemplate template = new WhatsAppTemplate();
+                template.setMessageId(node.path("message_id").isMissingNode()
+                        ? null : node.path("message_id").asInt());
+                template.setTemplateId(node.path("template_id").asText(null));
+                template.setTemplateName(node.path("template_name").asText(null));
+                template.setCategory(node.path("category").asText(null));
+                template.setStatus(node.path("status").asText(null));
+                template.setLanguage(node.path("language").asText(null));
+                template.setVarCount(node.path("var_count").isMissingNode()
+                        ? null : node.path("var_count").asInt());
+
+                // The body is one entry in a components array that also holds
+                // buttons and, for a document template, a header.
+                for (JsonNode component : node.path("components")) {
+                    String type = component.path("type").asText("");
+                    if ("BODY".equalsIgnoreCase(type)) {
+                        template.setBodyText(component.path("text").asText(null));
+                    } else if ("BUTTONS".equalsIgnoreCase(type)) {
+                        template.setHasButtons(true);
+                    }
+                }
+                templates.add(template);
+            }
+        }
+        return templates;
     }
 
     private String smsUrl(MessageOutbox message) {
