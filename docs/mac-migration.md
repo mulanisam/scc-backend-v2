@@ -7,6 +7,31 @@ run by whatever has direct, supervised access to that machine, not relayed
 from somewhere else. Nothing here needs guessing at what the Mac's database
 actually looks like - every step starts by asking it.
 
+**What actually happened, on this Mac (2026-09-13):** the shop's owner asked,
+partway through following this, to leave `poultry_db` and the old app running
+completely untouched rather than migrate it in place, and stand the v2 app up
+against a fresh copy instead. Steps 0-4 below still ran exactly as written - that's what caught a real bug
+in `V8__remove_duplicate_trip_and_line.sql` on the dry-run copy, before it
+ever touched anything real (see Step 3's note on what to do when a migration
+fails there) - but Step 5 onward
+became "apply to a new database called `poultry_db_v2`, leave `poultry_db`
+alone" rather than "apply to `poultry_db` itself." Both are valid ways to use
+this document; which one is right depends on whether the business wants the
+old app kept as a running fallback (this Mac's choice) or retired outright.
+The steps below are written for the in-place case; read "the real database"
+as "wherever you're actually applying this" if you've made the other choice.
+
+The ledger backfill (`POST /admin/migration/ledger`, Step 7) doesn't have to
+go through the HTTP endpoint - it's one call to
+`LedgerMigrationService.migrateExistingSalesToLedger()`, and a throwaway
+Spring `ApplicationRunner` that calls it directly, then gets deleted before
+the real build, avoids needing a real admin JWT for what is a one-time,
+locally-run operation. That's how it was done here: 488 customers, 56,123
+sales, 56,418 ledger entries, verified afterward by checking that
+`customer.balance_amount` summed across everyone matches the sum of each
+customer's own latest ledger running balance exactly - not just that the
+backfill "ran without error."
+
 ## Why this isn't just "copy the jar over"
 
 The old app's database was never under Flyway - no `flyway_schema_history`
