@@ -31,8 +31,48 @@
 -- collected, so 29,450.00 of debt, and 2,03,96,697.00 - 29,450.00 is 2,03,67,247.00,
 -- which is what the test database already holds.
 --
--- Idempotent: on the test database every DELETE matches nothing and the re-chain
--- recomputes the balances it already has.
+-- Idempotent: on the test database every DELETE matches nothing, the balance
+-- adjustment in step 5 subtracts zero, and the re-chain in step 4 recomputes the
+-- balances it already has.
+--
+-- ---------------------------------------------------------------------------
+-- Fixed after this shipped: step 5 used to read each customer's balance back
+-- from customer_ledger rather than adjust it directly, and that is wrong on any
+-- database where the ledger backfill has not run yet at this point in the
+-- sequence - a fresh environment applying V1 through V14 in one pass, rather
+-- than the incremental history this was written against, where the backfill
+-- had already happened long before this file did.
+--
+-- Caught on a disposable restore of the Sohel Chicken Centre shop's own
+-- database (never under Flyway before, no prior migration history at all)
+-- before it ever touched anything real: with customer_ledger still empty,
+-- the old step 5 read nothing for all 21 customers, COALESCEd to zero, and
+-- overwrote every one of their balances with 0.00 - wiping real debt rather
+-- than reducing it by the 29,450.00 above. It was never wrong on a database
+-- where the ledger already existed by the time this ran, which is every
+-- environment it had been applied to until now, and why nothing caught it
+-- sooner.
+--
+-- Step 5 below no longer touches customer_ledger at all. It captures what the
+-- rows being deleted billed and collected, per customer, before they are gone,
+-- and subtracts exactly that from the customer's own cached balance - correct
+-- whether the ledger backfill has run, is running now, or has not happened
+-- yet, because it never depends on the ledger being there to ask.
+
+-- ---------------------------------------------------------------------------
+-- 0. What each affected customer is owed less of, from the rows about to be
+--    deleted. Captured now because step 2 removes the only place this is
+--    readable from.
+-- ---------------------------------------------------------------------------
+CREATE TEMPORARY TABLE `v8_duplicate_effect` AS
+SELECT `customer_id`,
+       COALESCE(SUM(`amount`), 0) AS `billed`,
+       COALESCE(SUM(`payment`), 0) AS `collected`
+  FROM `sale`
+ WHERE `id` IN (3709, 3710, 3711, 3712, 3713, 3714, 3715, 3716, 3717,
+                3718, 3719, 3720, 3721, 3722, 3723, 3724, 3725, 3726,
+                3727, 3728, 24598)
+ GROUP BY `customer_id`;
 
 -- ---------------------------------------------------------------------------
 -- 1. The ledger entries for the duplicate sales.
@@ -63,7 +103,10 @@ DELETE FROM `sale_details`
 -- Removing a row from the middle of a ledger leaves every later running_balance
 -- for that customer overstated. Recomputed here in one pass per customer, in the
 -- same order the application uses - transaction_date then id - so the chain
--- matches what recalculateBalancesFromDate would produce.
+-- matches what recalculateBalancesFromDate would produce. A no-op wherever the
+-- ledger backfill has not populated these customers yet - there is nothing to
+-- re-chain, and that is fine: it will be built correctly, without these deleted
+-- rows, whenever the backfill does run, because they are already gone from sale.
 UPDATE `customer_ledger` cl
   JOIN (
         SELECT `id`,
@@ -76,14 +119,11 @@ UPDATE `customer_ledger` cl
    SET cl.`running_balance` = recomputed.chained;
 
 -- ---------------------------------------------------------------------------
--- 5. Bring each customer's cached balance back in step with their ledger.
+-- 5. Reduce each customer's cached balance by exactly what the deleted rows
+--    were worth to them - billed less collected - captured in step 0.
 -- ---------------------------------------------------------------------------
 UPDATE `customer` c
-   SET c.`balance_amount` = COALESCE((
-           SELECT cl.`running_balance`
-             FROM `customer_ledger` cl
-            WHERE cl.`customer_id` = c.`id`
-            ORDER BY cl.`transaction_date` DESC, cl.`id` DESC
-            LIMIT 1), 0)
- WHERE c.`id` IN (6, 8, 11, 18, 22, 23, 26, 29, 92, 95, 141, 142, 143, 144, 146,
-                  148, 227, 228, 232, 247, 314);
+  JOIN `v8_duplicate_effect` d ON d.`customer_id` = c.`id`
+   SET c.`balance_amount` = c.`balance_amount` - (d.`billed` - d.`collected`);
+
+DROP TEMPORARY TABLE `v8_duplicate_effect`;
