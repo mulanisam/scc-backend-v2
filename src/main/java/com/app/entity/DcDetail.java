@@ -2,6 +2,8 @@ package com.app.entity;
 
 import java.math.BigDecimal;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
@@ -28,6 +30,15 @@ public class DcDetail {
 	    private BigDecimal rate;
 	    private BigDecimal amount;
 
+	    /**
+	     * The purchase this line belongs to.
+	     *
+	     * @JsonIgnore because it is the back half of the relationship: a purchase serialises
+	     * its lines, and a line serialising its purchase is how the two recurse into each
+	     * other until the response stops. With open-in-view off it would fail on the
+	     * uninitialised proxy first, which is a different symptom of the same mistake.
+	     */
+	    @JsonIgnore
 	    @ManyToOne(fetch = FetchType.LAZY)
 	    @JoinColumn(name = "purchase_id")
 	    private Purchase purchase;

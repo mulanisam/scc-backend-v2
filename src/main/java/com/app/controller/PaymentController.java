@@ -2,12 +2,12 @@ package com.app.controller;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,92 +27,64 @@ import com.app.service.PaymentService;
 public class PaymentController {
 
     private static final Logger logger = LoggerFactory.getLogger(PaymentController.class);
-
     @Autowired
     private PaymentService paymentService;
 
-    /**
-     * Create a new payment entry
+    /*
+     * No try/catch in this controller.
+     *
+     * Every method here used to catch Exception and answer
+     * 500 "Failed to ...: " + e.getMessage(). Three things that cost:
+     *
+     *  - a payment for a customer id that does not exist was a 500, not a 404
+     *  - the raw exception text went to the screen, driver messages and all
+     *  - "Payment not found: " on a catch-all meant a genuine server fault was reported
+     *    as a 404, so a real failure looked like a typo
+     *
+     * GlobalExceptionHandler now does it: ResourceNotFoundException becomes 404,
+     * IllegalArgumentException and IllegalStateException become 400 with the message
+     * intact, and anything unexpected becomes a 500 carrying a reference that appears on
+     * every log line for that request.
      */
+
+    /** Records a receipt, posts it to the ledger, and acknowledges it to the customer. */
     @PostMapping
-    public ResponseEntity<?> createPayment(@RequestBody CustomerPaymentDTO paymentDTO) {
-        logger.info("Creating payment: {}", paymentDTO);
-        try {
-            CustomerPayment payment = paymentService.createPayment(paymentDTO);
-            return ResponseEntity.ok(payment);
-        } catch (IllegalArgumentException e) {
-            logger.error("Invalid payment data: {}", e.getMessage());
-            return ResponseEntity.badRequest().body(e.getMessage());
-        } catch (Exception e) {
-            logger.error("Error creating payment: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to create payment: " + e.getMessage());
-        }
+    public ResponseEntity<CustomerPayment> createPayment(@RequestBody CustomerPaymentDTO paymentDTO) {
+        logger.info("Recording a payment of {} for customer {}",
+                paymentDTO.getAmount(), paymentDTO.getCustomerId());
+        return ResponseEntity.ok(paymentService.createPayment(paymentDTO));
     }
 
-    /**
-     * Get all payments for a customer
-     */
+    /** Every receipt for one customer, newest first. */
     @GetMapping("/customer/{customerId}")
-    public ResponseEntity<?> getCustomerPayments(@PathVariable Long customerId) {
-        logger.info("Fetching payments for customer ID: {}", customerId);
-        try {
-            List<CustomerPayment> payments = paymentService.getCustomerPayments(customerId);
-            return ResponseEntity.ok(payments);
-        } catch (Exception e) {
-            logger.error("Error fetching payments: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to fetch payments: " + e.getMessage());
-        }
+    public ResponseEntity<List<CustomerPayment>> getCustomerPayments(@PathVariable Long customerId) {
+        return ResponseEntity.ok(paymentService.getCustomerPayments(customerId));
     }
 
-    /**
-     * Get payments by date range
-     */
+    /** Receipts taken between two dates. */
     @GetMapping("/date-range")
-    public ResponseEntity<?> getPaymentsByDateRange(
+    public ResponseEntity<List<CustomerPayment>> getPaymentsByDateRange(
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
-        logger.info("Fetching payments from {} to {}", startDate, endDate);
-        try {
-            List<CustomerPayment> payments = paymentService.getPaymentsByDateRange(startDate, endDate);
-            return ResponseEntity.ok(payments);
-        } catch (Exception e) {
-            logger.error("Error fetching payments: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to fetch payments: " + e.getMessage());
-        }
+        return ResponseEntity.ok(paymentService.getPaymentsByDateRange(startDate, endDate));
     }
 
-    /**
-     * Get payment by ID
-     */
     @GetMapping("/{paymentId}")
-    public ResponseEntity<?> getPaymentById(@PathVariable Long paymentId) {
-        logger.info("Fetching payment with ID: {}", paymentId);
-        try {
-            CustomerPayment payment = paymentService.getPaymentById(paymentId);
-            return ResponseEntity.ok(payment);
-        } catch (Exception e) {
-            logger.error("Error fetching payment: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body("Payment not found: " + e.getMessage());
-        }
+    public ResponseEntity<CustomerPayment> getPaymentById(@PathVariable Long paymentId) {
+        return ResponseEntity.ok(paymentService.getPaymentById(paymentId));
     }
 
     /**
-     * Delete (soft delete) a payment
+     * Cancels a receipt.
+     *
+     * Soft-deleted and reversed rather than removed: the payment row is flagged and a
+     * DEBIT_NOTE is posted, so the balance returns to what it was while the record of both
+     * the receipt and its cancellation survives.
      */
     @DeleteMapping("/{paymentId}")
-    public ResponseEntity<?> deletePayment(@PathVariable Long paymentId) {
-        logger.info("Deleting payment with ID: {}", paymentId);
-        try {
-            paymentService.deletePayment(paymentId);
-            return ResponseEntity.ok("Payment deleted successfully");
-        } catch (Exception e) {
-            logger.error("Error deleting payment: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to delete payment: " + e.getMessage());
-        }
+    public ResponseEntity<Map<String, String>> deletePayment(@PathVariable Long paymentId) {
+        logger.warn("Cancelling payment {}", paymentId);
+        paymentService.deletePayment(paymentId);
+        return ResponseEntity.ok(Map.of("message", "Payment cancelled and the balance reversed."));
     }
 }

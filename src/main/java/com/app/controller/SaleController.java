@@ -7,6 +7,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -52,37 +54,61 @@ public class SaleController {
     private DriverRepository driverRepository;
     
 
+    /**
+     * A page of sales, newest first.
+     *
+     * Paged, and it has to be. This used to be findAll() with no bound: measured against
+     * production it returned <b>1.13 GB in 12.8 seconds</b> - 55,528 sales, each serialised
+     * with its customer, that customer's city, the city's route and the route's own list of
+     * cities. Two of those at once would have exhausted the heap. Nothing in the
+     * application calls it, so the cap costs nothing and removes a way to take the service
+     * down with one request.
+     *
+     * @param size rows to return, capped at 500
+     */
     @GetMapping
-    public ResponseEntity<List<Sale>> getAllSales() {
-        logger.info("Entering getAllSales method");
-        try {
-            List<Sale> sales = saleRepository.findAll();
-            logger.info("Fetched all sales successfully, total count: {}", sales.size());
-            return ResponseEntity.ok(sales);
-        } catch (Exception e) {
-            logger.error("Error fetching all sales: {}", e.getMessage(), e);
-            return ResponseEntity.status(500).build();
-        }
+    public ResponseEntity<List<Sale>> getAllSales(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size) {
+
+        int bounded = Math.max(1, Math.min(size, MAX_PAGE_SIZE));
+        List<Sale> sales = saleRepository.findAll(
+                PageRequest.of(Math.max(0, page), bounded, Sort.by(Sort.Direction.DESC, "id")))
+                .getContent();
+
+        logger.info("Returning {} sales (page {}, size {})", sales.size(), page, bounded);
+        return ResponseEntity.ok(sales);
     }
 
+    /** A page of sales is capped here; the whole table is 55,528 rows and 1.13 GB of JSON. */
+    private static final int MAX_PAGE_SIZE = 500;
+
+    /*
+     * The three endpoints below wrote a sale without touching the ledger, and each was
+     * measured doing real damage:
+     *
+     *   POST   created a sale with no ledger row and no balance change - the customer owed
+     *          money the ledger did not know about
+     *   PUT    changed an amount from 1200 to 1300 and left the ledger row saying 1200
+     *   DELETE removed sale 56388 and left ledger row 112818 pointing at it, with the
+     *          balance still inflated by the deleted sale's 1,000
+     *
+     * That contradicts the one rule the whole ledger redesign rests on: the ledger is the
+     * only thing that maintains a customer's balance. They refuse now rather than corrupt.
+     * Nothing in the application calls them - sales are entered through /bulk and /single,
+     * both of which post correctly - so refusing costs nothing and closes a route by which
+     * 2 crore of receivables could be silently put out of step.
+     *
+     * Deleting them outright is the next step; they are kept as explicit refusals so that
+     * anything still calling them gets told where to go instead of quietly succeeding.
+     */
     @PostMapping
     public ResponseEntity<Sale> createSale(@RequestBody Sale sale) {
-        logger.info("Entering createSale method with parameters: {}", sale);
-        try {
-            sale.setCustomer(customerRepository.findById(sale.getCustomer().getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Customer not found")));
-            sale.setDriver(driverRepository.findById(sale.getDriver().getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Driver not found")));
-            Sale savedSale = saleRepository.save(sale);
-            logger.info("Created sale with ID: {}", savedSale.getId());
-            return ResponseEntity.ok(savedSale);
-        } catch (ResourceNotFoundException e) {
-            logger.warn("Resource not found: {}", e.getMessage());
-            return ResponseEntity.status(404).body(null);
-        } catch (Exception e) {
-            logger.error("Error creating sale: {}", e.getMessage(), e);
-            return ResponseEntity.status(500).build();
-        }
+        logger.warn("Refused POST /user/sales: this endpoint does not post to the ledger");
+        throw new IllegalStateException(
+                "Sales are not recorded through this endpoint, because it does not post to the"
+                        + " ledger and the balance would not move. Use /user/sales/bulk for a"
+                        + " trip or /user/sales/single for one customer.");
     }
 
     /**
@@ -116,68 +142,34 @@ public class SaleController {
         return ResponseEntity.ok(sale);
     }
 
+    /**
+     * One sale.
+     *
+     * No try/catch: the handler turns the ResourceNotFoundException into a 404 whose body
+     * names the id. The block here returned {@code status(404).body(null)} - an empty body,
+     * so a screen had nothing to show and could only print its own guess.
+     */
     @GetMapping("/{id}")
     public ResponseEntity<Sale> getSaleById(@PathVariable Long id) {
-        logger.info("Entering getSaleById method with ID: {}", id);
-        try {
-            Sale sale = saleRepository.findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("Sale not found with id " + id));
-            logger.info("Fetched sale with ID: {}", id);
-            return ResponseEntity.ok(sale);
-        } catch (ResourceNotFoundException e) {
-            logger.warn("Resource not found: {}", e.getMessage());
-            return ResponseEntity.status(404).body(null);
-        } catch (Exception e) {
-            logger.error("Error fetching sale with ID {}: {}", id, e.getMessage(), e);
-            return ResponseEntity.status(500).build();
-        }
+        return ResponseEntity.ok(saleRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Sale " + id + " was not found.")));
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<Sale> updateSale(@PathVariable Long id, @RequestBody Sale saleDetails) {
-        logger.info("Entering updateSale method with ID: {} and parameters: {}", id, saleDetails);
-        try {
-            Sale sale = saleRepository.findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("Sale not found with id " + id));
-
-            sale.setDate(saleDetails.getDate());
-            sale.setCustomer(customerRepository.findById(saleDetails.getCustomer().getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Customer not found")));
-            sale.setDriver(driverRepository.findById(saleDetails.getDriver().getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Driver not found")));
-            sale.setKilograms(saleDetails.getKilograms());
-            sale.setRate(saleDetails.getRate());
-            sale.setAmount(saleDetails.getAmount());
-            sale.setDescription(saleDetails.getDescription());
-
-            Sale updatedSale = saleRepository.save(sale);
-            logger.info("Updated sale with ID: {}", id);
-            return ResponseEntity.ok(updatedSale);
-        } catch (ResourceNotFoundException e) {
-            logger.warn("Resource not found: {}", e.getMessage());
-            return ResponseEntity.status(404).body(null);
-        } catch (Exception e) {
-            logger.error("Error updating sale with ID {}: {}", id, e.getMessage(), e);
-            return ResponseEntity.status(500).build();
-        }
+        logger.warn("Refused PUT /user/sales/{}: this endpoint does not update the ledger", id);
+        throw new IllegalStateException(
+                "A sale cannot be edited here: the change would not reach the ledger and the"
+                        + " balance would keep the old amount. Enter a correcting entry instead.");
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteSale(@PathVariable Long id) {
-        logger.info("Entering deleteSale method with ID: {}", id);
-        try {
-            Sale sale = saleRepository.findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("Sale not found with id " + id));
-            saleRepository.delete(sale);
-            logger.info("Deleted sale with ID: {}", id);
-            return ResponseEntity.noContent().build();
-        } catch (ResourceNotFoundException e) {
-            logger.warn("Resource not found: {}", e.getMessage());
-            return ResponseEntity.status(404).build();
-        } catch (Exception e) {
-            logger.error("Error deleting sale with ID {}: {}", id, e.getMessage(), e);
-            return ResponseEntity.status(500).build();
-        }
+        logger.warn("Refused DELETE /user/sales/{}: this endpoint leaves the ledger behind", id);
+        throw new IllegalStateException(
+                "A sale cannot be deleted here: its ledger row would be left pointing at a row"
+                        + " that no longer exists and the balance would stay as it was. Post a"
+                        + " correcting entry, which keeps both the original and the correction.");
     }
     
     @PostMapping("/saveDetails")

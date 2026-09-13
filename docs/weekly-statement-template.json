@@ -1,0 +1,40 @@
+{
+  "name": "weekly_statement",
+  "language": "en",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "HEADER",
+      "format": "DOCUMENT",
+      "example": {
+        "header_handle": [
+          "https://www.fast2sms.com/sample-statement.pdf"
+        ]
+      }
+    },
+    {
+      "type": "BODY",
+      "text": "नमस्कार {{1}},\n\nदिनांक {{2}} ते {{3}} या कालावधीचे खाते विवरण सोबत जोडले आहे.\n\nएकूण शिल्लक: ₹{{4}}\n\nकाही शंका असल्यास कृपया संपर्क करा.\n\n-सोहेल चिकन,माढा",
+      "example": {
+        "body_text": [
+          [
+            "Javed Kureshi",
+            "01-09-2026",
+            "07-09-2026",
+            "307940"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "PHONE_NUMBER",
+          "text": "कॉल करा",
+          "phone_number": "+918605030099"
+        }
+      ]
+    }
+  ]
+}

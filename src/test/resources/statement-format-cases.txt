@@ -1,0 +1,90 @@
+# Statement formatting, as the browser produces it.
+#
+# Generated from frontend/src/components/ledger/ledgerStatement.js and the
+# ledgerStatementPdf.js that used to sit beside it - the code that drew every statement
+# customers have received so far. That file has since been deleted: the PDF is drawn
+# here now, because the weekly WhatsApp statement is sent by a scheduled job with no
+# browser to draw in, and two layouts would have drifted.
+#
+# So this is a frozen baseline rather than a live comparison. It says what the figures
+# on an already-posted statement look like, and StatementFormat has to keep producing
+# them character for character - otherwise a customer holding last month's statement
+# beside this month's finds a number that changed shape for no reason.
+#
+# ledgerStatement.js still formats the on-screen table from the same rules, so a
+# deliberate change means editing both sides and regenerating this file.
+#
+# function|input|expected
+
+money|0|0.00
+money|1|1.00
+money|0.5|0.50
+money|12.345|12.35
+money|1000|1,000.00
+money|1234|1,234.00
+money|12345|12,345.00
+money|123456|1,23,456.00
+money|1234567|12,34,567.00
+money|12345678|1,23,45,678.00
+money|1234567890|1,23,45,67,890.00
+money|5440|5,440.00
+money|305940.005|3,05,940.01
+money|-1500|-1,500.00
+money|0.004|0.00
+money|99999999.99|9,99,99,999.99
+balance|0|0.00    
+balance|1|1.00 Dr
+balance|0.5|0.50 Dr
+balance|12.345|12.35 Dr
+balance|1000|1,000.00 Dr
+balance|1234|1,234.00 Dr
+balance|12345|12,345.00 Dr
+balance|123456|1,23,456.00 Dr
+balance|1234567|12,34,567.00 Dr
+balance|12345678|1,23,45,678.00 Dr
+balance|1234567890|1,23,45,67,890.00 Dr
+balance|5440|5,440.00 Dr
+balance|305940.005|3,05,940.01 Dr
+balance|-1500|1,500.00 Cr
+balance|0.004|0.00 Dr
+balance|99999999.99|9,99,99,999.99 Dr
+weight|0|
+weight|61.5|61.500
+weight|61.5004|61.500
+weight|1234.5678|1,234.568
+weight|0.0005|0.001
+weight|100000|1,00,000.000
+rate|0|
+rate|88.46|88.46
+rate|88.455|88.46
+rate|1234.5|1,234.50
+count|0|
+count|7|7
+count|24|24
+count|1000|1,000
+count|12345|12,345
+count|1234567|12,34,567
+count|-42|-42
+date|2026-01-09|09 Jan 2026
+date|2026-09-09|09 Sep 2026
+date|2026-12-31|31 Dec 2026
+date|2026-02-01|01 Feb 2026
+words|0|Rupees Nil
+words|1|Rupees One only
+words|15|Rupees Fifteen only
+words|20|Rupees Twenty only
+words|99|Rupees Ninety Nine only
+words|100|Rupees One Hundred only
+words|101|Rupees One Hundred One only
+words|999|Rupees Nine Hundred Ninety Nine only
+words|1000|Rupees One Thousand only
+words|1001|Rupees One Thousand One only
+words|100000|Rupees One Lakh only
+words|207940|Rupees Two Lakh Seven Thousand Nine Hundred Forty only
+words|305940|Rupees Three Lakh Five Thousand Nine Hundred Forty only
+words|1234567|Rupees Twelve Lakh Thirty Four Thousand Five Hundred Sixty Seven only
+words|10000000|Rupees One Crore only
+words|123456789|Rupees Twelve Crore Thirty Four Lakh Fifty Six Thousand Seven Hundred Eighty Nine only
+words|0.5|Fifty Paise only
+words|1500.25|Rupees One Thousand Five Hundred and Twenty Five Paise only
+words|5440.99|Rupees Five Thousand Four Hundred Forty and Ninety Nine Paise only

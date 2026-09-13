@@ -1,6 +1,7 @@
 package com.app.utility;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
@@ -66,6 +67,32 @@ class SmsMessageBuilderTest {
         assertTrue(message.body().contains("पक्षी: 15"), message.body());
         assertTrue(message.body().contains("वजन: 30.0 किलो"), message.body());
         assertTrue(message.body().contains("दर: ₹100.00 प्रति किलो"), message.body());
+        assertTrue(message.body().contains("रक्कम: ₹3,000"), message.body());
+        assertTrue(message.body().contains("जमा: ₹500"), message.body());
+        assertTrue(message.body().contains("एकूण शिल्लक: ₹2,500"), message.body());
+    }
+
+    @Test
+    @DisplayName("the rate-free summary drops the rate and renumbers, it does not blank it")
+    void dailySaleSummaryNoRateOmitsTheRate() {
+        SmsMessageBuilder.Message message = SmsMessageBuilder.dailySaleSummaryNoRate(
+                "Mainuddin Kazi", DATE, 15,
+                new BigDecimal("30.000"), new BigDecimal("3000.00"),
+                new BigDecimal("500.00"), new BigDecimal("2500.00"));
+
+        // name | date | birds | weight | amount | paid | balance - seven, not eight
+        // with a zero in the rate slot. Passing zero was the other option considered
+        // and it is worse: the approved body reads "दर: ₹{{5}} प्रति किलो", so a zero
+        // renders as a rate of nothing, which looks like a billing fault.
+        assertEquals("Mainuddin Kazi|09-09-2026|15|30.0|3000|500|2500", message.variables());
+        assertEquals(7, message.variables().split("\\|", -1).length);
+
+        assertFalse(message.body().contains("दर"), message.body());
+        assertFalse(message.body().contains("प्रति किलो"), message.body());
+
+        // Everything else still reads the same, and in the same order.
+        assertTrue(message.body().contains("पक्षी: 15"), message.body());
+        assertTrue(message.body().contains("वजन: 30.0 किलो"), message.body());
         assertTrue(message.body().contains("रक्कम: ₹3,000"), message.body());
         assertTrue(message.body().contains("जमा: ₹500"), message.body());
         assertTrue(message.body().contains("एकूण शिल्लक: ₹2,500"), message.body());

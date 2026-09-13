@@ -12,8 +12,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.app.dto.CustomerPaymentDTO;
 import com.app.utility.MoneyRules;
+import com.app.utility.SmsMessageBuilder;
 import com.app.entity.Customer;
 import com.app.entity.CustomerPayment;
+import com.app.entity.MessageOutbox.Channel;
+import com.app.entity.MessageOutbox.MessageType;
 import com.app.repository.CustomerPaymentRepository;
 import com.app.repository.CustomerRepository;
 
@@ -33,10 +36,13 @@ public class PaymentServiceImpl implements PaymentService {
     @Autowired
     private LedgerService ledgerService;
 
+    @Autowired
+    private MessagingService messagingService;
+
     @Transactional
     @Override
     public CustomerPayment createPayment(CustomerPaymentDTO paymentDTO) {
-        logger.info("Creating payment entry: {}", paymentDTO);
+        logger.debug("Creating payment of {} for customer {}", paymentDTO.getAmount(), paymentDTO.getCustomerId());
         
         try {
             // Validate customer
@@ -74,7 +80,9 @@ public class PaymentServiceImpl implements PaymentService {
             // Create ledger entry (this handles backdate recalculation)
             ledgerService.createPaymentLedgerEntry(savedPayment);
             logger.info("Ledger entry created for payment ID: {}", savedPayment.getId());
-            
+
+            queueReceipt(savedPayment, paymentDTO.isSendSms(), paymentDTO.isSendWhatsapp());
+
             return savedPayment;
             
         } catch (ResourceNotFoundException e) {
@@ -86,6 +94,54 @@ public class PaymentServiceImpl implements PaymentService {
         } catch (Exception e) {
             logger.error("Error creating payment: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to create payment: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Acknowledges the receipt to the customer, on whichever channels were asked for.
+     *
+     * Queued in this transaction, like the sale path: the receipt row and the message
+     * commit together, so a payment cannot exist without its message having been queued
+     * and a rolled-back payment cannot leave one behind.
+     *
+     * Each channel gets the message its own approved template takes, and they are not
+     * the same message. WhatsApp's pay_received says what arrived - "आपल्याकडुन ₹X जमा
+     * झाले" - while the approved DLT template for SMS reads "सध्याची शिल्लक", a balance.
+     * Sending the amount received in a slot whose words say "balance" would put the
+     * wrong figure behind the wrong sentence, so SMS carries the new balance instead.
+     *
+     * The payment id goes into the idempotency key: a customer settling twice in one
+     * morning gets two receipts, where a per-day key would have taken the second for a
+     * duplicate of the first and dropped it.
+     */
+    private void queueReceipt(CustomerPayment payment, boolean sendSms, boolean sendWhatsapp) {
+        if (!sendSms && !sendWhatsapp) {
+            return;
+        }
+
+        try {
+            Customer customer = payment.getCustomer();
+            LocalDate date = payment.getPaymentDate();
+
+            if (sendSms) {
+                // The balance after this receipt, which is what the DLT wording states.
+                SmsMessageBuilder.Message sms = SmsMessageBuilder.dailyBalance(
+                        customer.getName(), date, ledgerService.getCurrentBalance(customer));
+                messagingService.enqueue(customer, Channel.SMS, MessageType.PAYMENT_RECEIPT,
+                        date, null, sms.variables(), sms.body(), payment.getId());
+            }
+
+            if (sendWhatsapp) {
+                SmsMessageBuilder.Message whatsapp = SmsMessageBuilder.paymentReceived(
+                        customer.getName(), date, payment.getAmount());
+                messagingService.enqueue(customer, Channel.WHATSAPP, MessageType.PAYMENT_RECEIPT,
+                        date, null, whatsapp.variables(), whatsapp.body(), payment.getId());
+            }
+        } catch (RuntimeException e) {
+            // A receipt that cannot be queued must never fail the payment - the money
+            // has been taken. The outbox is the record, so a gap in it is visible after.
+            logger.error("Could not queue the receipt for payment {}: {}",
+                    payment.getId(), e.getMessage());
         }
     }
 

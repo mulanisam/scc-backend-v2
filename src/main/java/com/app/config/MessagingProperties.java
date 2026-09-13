@@ -36,6 +36,19 @@ public class MessagingProperties {
      */
     private boolean enabled = false;
 
+    /**
+     * Whether the weekly statement run happens at all.
+     *
+     * Separate from messaging.enabled, which governs sending. This governs whether the
+     * Monday job builds the week's statements in the first place - so the queue can be
+     * filled and inspected before the send switch is touched, and a week's statements can
+     * be turned off without stopping the daily message.
+     */
+    private boolean weeklyStatementEnabled = false;
+
+    /** Time zone the weekly cron runs in. The business is in IST. */
+    private String timezone = "Asia/Kolkata";
+
     /** SMS today; WHATSAPP once the templates are approved. */
     private Channel channel = Channel.SMS;
 
@@ -75,6 +88,27 @@ public class MessagingProperties {
          * against the wrong template and quietly failing for every customer.
          */
         private String whatsappDailyTemplateId;
+
+        /**
+         * Whether the daily message carries the per-kilo rate.
+         *
+         * Off, because the owner does not want the rate on a customer's phone. It
+         * decides which builder runs, and therefore how many variables are sent:
+         * seven without the rate, eight with it. The two need different approved
+         * templates, so this must agree with whatsappDailyTemplateId -
+         *
+         *   false -> daily_sale_no_rate  (message_id 32367, 7 variables)
+         *   true  -> daily_sale_summary  (message_id 32340, 8 variables)
+         *
+         * A mismatch is caught before anything is sent: the queue checks the value
+         * count against the provider's own var_count for the configured template and
+         * holds the message with a reason. So getting this wrong delays messages
+         * rather than sending a balance in the slot meant for a rate.
+         */
+        private boolean whatsappDailyIncludesRate = false;
+
+        /** The media template that carries the weekly statement PDF. */
+        private String whatsappStatementTemplateId;
 
         public boolean hasWhatsappDailyTemplate() {
             return whatsappDailyTemplateId != null && !whatsappDailyTemplateId.isBlank();

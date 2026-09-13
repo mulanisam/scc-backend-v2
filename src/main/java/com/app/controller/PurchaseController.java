@@ -2,6 +2,7 @@ package com.app.controller;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,23 +58,40 @@ public class PurchaseController {
         return purchaseRepository.findAll();
     }
 
+    /**
+     * Records a purchase, with a scanned DC per line.
+     *
+     * No try/catch. Every failure here used to come back as a 400 reading "Failed to process
+     * request" - a supplier that does not exist, a line whose amount does not add up, a
+     * malformed date and a disk that could not be written to, all the same sentence. The
+     * handler turns each into its own status with its own message, and the operator can act
+     * on "DC line 2 does not add up" without telephoning anybody.
+     *
+     * The files list is positional: files[i] is the scan for dcDetails[i]. A line with no scan
+     * is allowed - the DC often arrives later - and a short list no longer walks off the end,
+     * which it did with IndexOutOfBoundsException reported as that same generic 400.
+     */
     @PostMapping
-    public ResponseEntity<String> createPurchase(@RequestParam("purchaseEntry") String purchaseJson,
-            @RequestParam("files") List<MultipartFile> files) throws IOException {
-        
-        try {
-            logger.info("Creating purchase with JSON: {}", purchaseJson);
-            ObjectMapper objectMapper = new ObjectMapper();
-            PurchaseDTO purchaseDTO = objectMapper.readValue(purchaseJson, PurchaseDTO.class);
-            
-            Purchase purchase = purchaseService.createPurchase(purchaseDTO, files);
-            logger.info("Purchase created successfully with ID: {}", purchase.getId());
-            return ResponseEntity.ok("Purchase Created successfully! ID-" + purchase.getId());
+    public ResponseEntity<Map<String, Object>> createPurchase(
+            @RequestParam("purchaseEntry") String purchaseJson,
+            @RequestParam(value = "files", required = false) List<MultipartFile> files)
+            throws IOException {
 
-        } catch (Exception e) {
-            logger.error("Failed to process request", e);
-            return ResponseEntity.badRequest().body("Failed to process request");
-        }
+        PurchaseDTO purchaseDTO = new ObjectMapper().readValue(purchaseJson, PurchaseDTO.class);
+        logger.info("Purchase entry requested for supplier {} dated {}",
+                purchaseDTO.getSupplier(), purchaseDTO.getEntryDate());
+
+        Purchase purchase = purchaseService.createPurchase(purchaseDTO,
+                files == null ? List.of() : files);
+
+        logger.info("Purchase created with ID: {}", purchase.getId());
+        // A body with the figures in it, rather than a sentence with an id glued on: the
+        // screen can show what was recorded and what the supplier is now owed.
+        return ResponseEntity.ok(Map.of(
+                "id", purchase.getId(),
+                "totalAmount", purchase.getTotalAmount(),
+                "lines", purchase.getDcDetails().size(),
+                "message", "Purchase recorded and billed to " + purchase.getSupplier().getName()));
     }
 
     @GetMapping("/{id}")
@@ -117,18 +135,27 @@ public class PurchaseController {
         return purchaseService.getPurchaseDetails(supplierId, entryDate);
     }
     
+    /**
+     * Records money paid to a supplier.
+     *
+     * Same reasoning as the entry above: the catch-all reported a supplier that does not
+     * exist, a payment of zero and two purchases sharing a date as one indistinguishable
+     * "Failed to process request". The last of those was not hypothetical - it is what paying
+     * Komarla Agrovet for 2025-09-06 did every time.
+     */
     @PostMapping("/payment")
-    public ResponseEntity<String> purchasePayment(@RequestBody PurchasePaymentDTO  paymentHistDto) throws IOException {
-        
-        try {
-            logger.info("Creating purchase Payment SupplierPaymentHist: {}", paymentHistDto); 
-            SupplierPaymentHist paymentHistSaved=purchaseService.savePurchasePayment(paymentHistDto);
-            
-            return ResponseEntity.ok("Purchase Payment Created successfully! ID-" + paymentHistSaved.getId());
+    public ResponseEntity<Map<String, Object>> purchasePayment(
+            @RequestBody PurchasePaymentDTO paymentHistDto) {
 
-        } catch (Exception e) {
-            logger.error("Failed to process request", e);
-            return ResponseEntity.badRequest().body("Failed to process request");
-        }
+        logger.info("Supplier payment requested for supplier {} on {}",
+                paymentHistDto.getSupplier(), paymentHistDto.getDateOfTransaction());
+
+        SupplierPaymentHist saved = purchaseService.savePurchasePayment(paymentHistDto);
+
+        return ResponseEntity.ok(Map.of(
+                "id", saved.getId(),
+                "paidAmount", saved.getPaidAmount(),
+                "stillOutstanding", saved.getPendingPayment(),
+                "message", "Payment recorded."));
     }
 }

@@ -50,11 +50,25 @@ public class MessageOutbox extends AuditableEntity {
         OWNER_DIGEST
     }
 
+    /**
+     * SENT and DELIVERED are different facts and the distinction matters.
+     *
+     * SENT means Fast2SMS accepted the message. DELIVERED means the provider has
+     * since reported it reaching the handset. A screen that showed the first as
+     * though it were the second would tell somebody their customer had been informed
+     * when the message may have bounced - so delivery is polled and recorded
+     * separately rather than assumed from acceptance.
+     */
     public enum Status {
         /** Queued, not yet attempted. */
         PENDING,
+        /** Accepted by the provider. Not yet known to have arrived. */
         SENT,
-        /** Attempted and rejected; eligible for retry until the cap. */
+        /** The provider reports it reached the handset. */
+        DELIVERED,
+        /** WhatsApp only, and only if the customer has read receipts on. */
+        READ,
+        /** Attempted and rejected, or reported undelivered; retried until the cap. */
         FAILED,
         /** Never attempted, and never will be - opted out, or no usable number. */
         SKIPPED,
@@ -140,11 +154,66 @@ public class MessageOutbox extends AuditableEntity {
     private LocalDateTime lastAttemptAt;
     private LocalDateTime sentAt;
 
+    /** The provider's request_id. What delivery is looked up by. */
     private String providerMessageId;
     @Column(length = 1000)
     private String providerResponse;
     @Column(length = 1000)
     private String error;
+
+    // ---- delivery, polled from the provider -------------------------------
+
+    private LocalDateTime deliveredAt;
+    private LocalDateTime readAt;
+    /** The provider's own word for it: delivered, undelivered, failed, read. */
+    private String providerStatus;
+    /** So a message is not polled again the moment after it was checked. */
+    private LocalDateTime statusCheckedAt;
+
+    /** True once the provider has reported an outcome that will not change. */
+    public boolean isTerminal() {
+        return status == Status.DELIVERED || status == Status.READ
+                || status == Status.SKIPPED || status == Status.CANCELLED;
+    }
+
+    /**
+     * Records what the provider says became of the message.
+     *
+     * An undelivered report turns a SENT row into FAILED, because that is what it is:
+     * the provider accepted it and it did not arrive. Leaving it as SENT would make a
+     * failure look like a success on the dashboard.
+     */
+    public void applyDeliveryStatus(String providerStatus, LocalDateTime when) {
+        this.providerStatus = providerStatus;
+        this.statusCheckedAt = LocalDateTime.now();
+        if (providerStatus == null) {
+            return;
+        }
+
+        switch (providerStatus.trim().toLowerCase()) {
+            case "delivered" -> {
+                this.status = Status.DELIVERED;
+                this.deliveredAt = when == null ? LocalDateTime.now() : when;
+            }
+            case "read" -> {
+                this.status = Status.READ;
+                this.readAt = when == null ? LocalDateTime.now() : when;
+                if (this.deliveredAt == null) {
+                    // Read implies delivered, and the delivered report may not have
+                    // been seen if polling caught up late.
+                    this.deliveredAt = this.readAt;
+                }
+            }
+            case "failed", "undelivered", "rejected" -> {
+                this.status = Status.FAILED;
+                this.error = truncate("Provider reported " + providerStatus, 1000);
+            }
+            default -> {
+                // sent, accepted, queued and anything unrecognised: leave the status
+                // alone and keep the provider's word for the next poll to interpret.
+            }
+        }
+    }
 
     /** Marks the row sent, with whatever the provider said. */
     public void markSent(String messageId, String response) {

@@ -8,6 +8,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -25,10 +27,13 @@ import com.app.entity.CustomerLedger;
 import com.app.entity.CustomerLedger.TransactionType;
 import com.app.entity.CustomerPayment;
 import com.app.entity.Sale;
+import com.app.entity.TradingEntry;
+import com.app.entity.TradingTrip;
 import com.app.exception.ResourceNotFoundException;
 import com.app.repository.CustomerLedgerRepository;
 import com.app.repository.CustomerRepository;
 import com.app.repository.SaleRepository;
+import com.app.repository.TradingEntryRepository;
 import com.app.utility.MoneyRules;
 
 @Service
@@ -44,6 +49,15 @@ public class LedgerServiceImpl implements LedgerService {
 
     @Autowired
     private SaleRepository saleRepository;
+
+    /**
+     * Read only to fill in quantities on a statement.
+     *
+     * Route 9's 571 ledger rows point at trading entries rather than sales, and without
+     * this their statements showed every line's birds, weight and rate as zero.
+     */
+    @Autowired
+    private TradingEntryRepository tradingEntryRepository;
 
     @Override
     @Transactional
@@ -107,6 +121,64 @@ public class LedgerServiceImpl implements LedgerService {
         }
         
         return savedLedger;
+    }
+
+    @Override
+    @Transactional
+    public CustomerLedger createTradingLedgerEntry(TradingEntry entry) {
+        logger.info("Creating ledger entry for trading entry ID: {}", entry.getId());
+
+        if (entry.getCustomer() == null) {
+            throw new IllegalStateException("Trading entry " + entry.getId()
+                    + " has no ledger account. Link the party to a customer before billing it.");
+        }
+
+        // Loaded for the same reason the sale path loads it: a detached or stub Customer
+        // merged back would copy its nulls over the real row.
+        Customer customer = customerRepository.findById(entry.getCustomer().getId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Customer " + entry.getCustomer().getId() + " was not found."));
+
+        CustomerLedger ledger = new CustomerLedger();
+        ledger.setCustomer(customer);
+        ledger.setTransactionDate(entry.getDate());
+        // SALE, not a type of its own: a statement should read one account's history
+        // without the reader having to know which subsystem recorded each line. The
+        // reference type is what distinguishes them.
+        ledger.setTransactionType(TransactionType.SALE);
+        ledger.setReferenceType(REFERENCE_TRADING_ENTRY);
+        ledger.setReferenceId(entry.getId());
+
+        BigDecimal amount = MoneyRules.money(entry.getAmount());
+        BigDecimal payment = MoneyRules.money(entry.getPayment());
+        ledger.setDebitAmount(amount);
+        ledger.setCreditAmount(payment);
+        ledger.setPaymentMode(entry.getPaymentMode());
+
+        Integer birds = entry.getBirdsSold() == null ? entry.getBirds() : entry.getBirdsSold();
+        ledger.setDescription("Trading - "
+                + (birds != null ? birds + " birds, " : "")
+                + (entry.getKilograms() != null ? entry.getKilograms() + " kg" : ""));
+
+        if (entry.getDate() != null && entry.getDate().isBefore(LocalDate.now())) {
+            ledger.setBackdated(true);
+        }
+
+        BigDecimal runningBalance = MoneyRules.money(
+                getCurrentBalance(customer).add(amount).subtract(payment));
+        ledger.setRunningBalance(runningBalance);
+
+        CustomerLedger saved = ledgerRepository.save(ledger);
+
+        if (ledger.isBackdated()) {
+            logger.info("Back-dated trading entry. Recalculating balances from {}", entry.getDate());
+            recalculateBalancesFromDate(customer, entry.getDate());
+        } else {
+            customer.setBalanceAmount(runningBalance);
+            customerRepository.save(customer);
+        }
+
+        return saved;
     }
 
     @Override
@@ -424,21 +496,47 @@ public class LedgerServiceImpl implements LedgerService {
      * runs to hundreds of sales.
      */
     private void attachSaleDetail(List<CustomerLedgerDTO> rows) {
-        List<Long> saleIds = rows.stream()
-                .filter(row -> row.getTransactionType() == TransactionType.SALE && row.getReferenceId() != null)
-                .map(CustomerLedgerDTO::getReferenceId)
-                .distinct()
-                .collect(Collectors.toList());
-
-        if (saleIds.isEmpty()) {
-            return;
-        }
-
-        Map<Long, Sale> sales = saleRepository.findAllById(saleIds).stream()
-                .collect(Collectors.toMap(Sale::getId, sale -> sale, (first, second) -> first));
+        /*
+         * A SALE row's quantities live on the sale - unless the sale has become a trading
+         * entry, in which case they live there.
+         *
+         * Both are resolved, keyed on reference_type. Looking only at sales was correct
+         * until route 9 moved into Trading: those 571 ledger rows now say TRADING_ENTRY,
+         * and a statement for one of the eleven wholesale parties came back with birds 0,
+         * weight 0.000 and rate 0.00 in every line while the money columns stayed right.
+         * The balance was never wrong, but a statement claiming a customer had bought
+         * nothing for 13,40,970 is not one to send.
+         */
+        Map<Long, Sale> sales = lookup(rows, REFERENCE_SALE,
+                ids -> saleRepository.findAllById(ids), Sale::getId);
+        Map<Long, TradingEntry> tradingEntries = lookup(rows, REFERENCE_TRADING_ENTRY,
+                ids -> tradingEntryRepository.findAllById(ids), TradingEntry::getId);
 
         for (CustomerLedgerDTO row : rows) {
-            Sale sale = row.getReferenceId() == null ? null : sales.get(row.getReferenceId());
+            if (row.getReferenceId() == null) {
+                continue;
+            }
+
+            if (REFERENCE_TRADING_ENTRY.equals(row.getReferenceType())) {
+                TradingEntry entry = tradingEntries.get(row.getReferenceId());
+                if (entry == null) {
+                    continue;
+                }
+                row.setBirds(entry.getBirdsSold() == null ? entry.getBirds() : entry.getBirdsSold());
+                row.setWeight(entry.getKilograms() == null ? null : MoneyRules.weight(entry.getKilograms()));
+                row.setRate(entry.getRate());
+                row.setObsolete(entry.isObsolete());
+                // No route, and that is the point of trading: a load goes out to several
+                // parties without belonging to a round. The trip still names the driver
+                // and the vehicle that brought it.
+                TradingTrip trip = entry.getTrip();
+                row.setDriverName(trip == null || trip.getDriver() == null
+                        ? null : trip.getDriver().getName());
+                row.setVehicleNo(entry.getVehicleNumber());
+                continue;
+            }
+
+            Sale sale = sales.get(row.getReferenceId());
             if (sale == null) {
                 continue;
             }
@@ -450,6 +548,34 @@ public class LedgerServiceImpl implements LedgerService {
             row.setDriverName(sale.getDriver() == null ? null : sale.getDriver().getName());
             row.setVehicleNo(sale.getVehicleNo() == null ? null : String.valueOf(sale.getVehicleNo()));
         }
+    }
+
+    private static final String REFERENCE_SALE = "SALE";
+    private static final String REFERENCE_TRADING_ENTRY = "TRADING_ENTRY";
+
+    /**
+     * One batched lookup for the rows of a given reference type.
+     *
+     * Batched rather than a query per row, because a full history for an active customer
+     * runs to hundreds of lines - customer 67 has 499.
+     */
+    private <T> Map<Long, T> lookup(List<CustomerLedgerDTO> rows,
+                                    String referenceType,
+                                    Function<List<Long>, List<T>> fetch,
+                                    Function<T, Long> idOf) {
+        List<Long> ids = rows.stream()
+                .filter(row -> row.getTransactionType() == TransactionType.SALE)
+                .filter(row -> referenceType.equals(row.getReferenceType()))
+                .map(CustomerLedgerDTO::getReferenceId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        return fetch.apply(ids).stream()
+                .collect(Collectors.toMap(idOf, item -> item, (first, second) -> first));
     }
 
     private LedgerStatementTotals buildTotals(List<CustomerLedgerDTO> rows, BigDecimal openingBalance) {

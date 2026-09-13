@@ -23,7 +23,15 @@ public class SingleSaleEntryDTO {
     private BigDecimal payment; // Payment received at time of sale
     private String paymentMode;
     private String description;
-    private boolean sendWAmsg;
-    /** Independent of sendWAmsg - both can be requested for one sale. */
+    /*
+     * Named to match the bulk, trading and payment DTOs.
+     *
+     * This was sendWAmsg, which nothing ever sent: the single sale screen offered no
+     * WhatsApp switch at all, so the field sat unread while the same flag on every other
+     * entry screen was called sendWhatsapp. One name for one thing, or the next screen wired
+     * up guesses wrong and silently sends nothing.
+     */
+    private boolean sendWhatsapp;
+    /** Independent of sendWhatsapp - both can be requested for one sale. */
     private boolean sendSms;
 }

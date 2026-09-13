@@ -118,6 +118,83 @@ public final class SmsMessageBuilder {
     }
 
     /**
+     * The same daily message with the rate line removed. Seven variables:
+     *
+     *   {{1}} name        {{5}} amount billed
+     *   {{2}} date        {{6}} paid today
+     *   {{3}} birds       {{7}} total balance
+     *   {{4}} weight
+     *
+     * The owner does not want the per-kilo rate on a customer's phone. Worth being
+     * clear about what this does and does not achieve: amount and weight are both
+     * still in the message, so anyone who divides one by the other has the rate back.
+     * It keeps the figure off a screen somebody might hold up in a market; it is not
+     * confidentiality.
+     *
+     * A separate method rather than a flag, because the two feed different approved
+     * templates and the variable count is what the provider validates. A boolean that
+     * dropped one value would silently shift every later variable into the wrong slot -
+     * the balance would print as the amount.
+     */
+    public static Message dailySaleSummaryNoRate(String customerName,
+                                                 LocalDate date,
+                                                 long birds,
+                                                 BigDecimal kilograms,
+                                                 BigDecimal amount,
+                                                 BigDecimal paid,
+                                                 BigDecimal balance) {
+
+        String formattedDate = date.format(DATE);
+
+        return new Message(
+                String.join("|",
+                        safe(customerName),
+                        formattedDate,
+                        String.valueOf(birds),
+                        weight(kilograms),
+                        plain(amount),
+                        plain(paid),
+                        plain(balance)),
+                String.format(
+                        "नमस्कार %s,%n"
+                                + "%n"
+                                + "दिनांक %s चा व्यवहार:%n"
+                                + "पक्षी: %d%n"
+                                + "वजन: %s किलो%n"
+                                + "रक्कम: ₹%s%n"
+                                + "जमा: ₹%s%n"
+                                + "%n"
+                                + "एकूण शिल्लक: ₹%s%n"
+                                + "%n"
+                                + "धन्यवाद!",
+                        safe(customerName), formattedDate, birds,
+                        weight(kilograms),
+                        money(amount), money(paid), money(balance)));
+    }
+
+    /**
+     * A receipt for money taken, for the WhatsApp pay_received template.
+     *
+     * Three variables - name, date, amount - matching the approved body "आज रोजी {{2}}
+     * आपल्याकडुन {{3}} रुपये जमा झाले". It states what arrived, not what is left,
+     * because that is what the customer is acknowledging; the balance goes out on the
+     * daily message and on the statement.
+     *
+     * The SMS side uses {@link #dailyBalance} instead: the approved DLT template there
+     * reads "सध्याची शिल्लक", a balance, so sending an amount received in that slot
+     * would put the wrong number behind the wrong words.
+     */
+    public static Message paymentReceived(String customerName, LocalDate date, BigDecimal amount) {
+        String formattedDate = date.format(DATE);
+
+        return new Message(
+                String.join("|", safe(customerName), formattedDate, plain(amount)),
+                String.format(
+                        "नमस्कार %s, दिनांक %s रोजी तुमच्याकडून ₹%s जमा झाले. धन्यवाद!",
+                        safe(customerName), formattedDate, money(amount)));
+    }
+
+    /**
      * Realised rate: amount billed over weight sold.
      *
      * Derived rather than taken from the sale rows, because a customer with two

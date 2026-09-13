@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logging.
+
+  There was no logging configuration at all before this file: everything went to the
+  console at Spring Boot's defaults. On a machine where the application is started from a
+  terminal that means the log exists only until the window is closed, there is no history
+  to look back through when somebody reports that yesterday's message did not arrive, and
+  nothing is ever pruned.
+
+  Three things this sets up:
+
+    - A file, rotated daily and at 20 MB, kept 60 days and capped at 2 GB total. This
+      machine's C: drive reached 100% full during development, so an uncapped log is not a
+      theoretical problem.
+    - A separate errors-only file. The question asked in support is "what broke today",
+      and answering it should not mean reading a day of INFO.
+    - The request id on every line. A 500 hands the operator a reference; that reference is
+      this id, so one grep returns the whole request rather than a single error line.
+
+  Levels are deliberately quieter in prod than in dev: the frameworks' INFO output is
+  startup noise that buries the application's own lines.
+-->
+<configuration scan="false">
+
+    <!-- Spring's own defaults for colour and exception formatting. -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <springProperty scope="context" name="appName" source="spring.application.name" defaultValue="scc-backend"/>
+
+    <!--
+      Where the log goes. Overridable with LOG_DIR, because the working directory is
+      wherever the service happens to be started from and a log that lands in a different
+      place each time is one nobody finds.
+    -->
+    <property name="LOG_DIR" value="${LOG_DIR:-logs}"/>
+
+    <!--
+      %X{requestId} is the id RequestIdFilter puts in the MDC. "-" outside a request, which
+      is what startup and the scheduled jobs show.
+    -->
+    <property name="FILE_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{requestId:--}] %logger{36} - %msg%n%wEx"/>
+    <property name="CONSOLE_PATTERN"
+              value="%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan([%X{requestId:--}]) %logger{28} - %msg%n%wEx"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/${appName}.log</file>
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/${appName}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <!-- Compressed: a day of this application's log is mostly repetitive text. -->
+            <maxFileSize>20MB</maxFileSize>
+            <maxHistory>60</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!--
+      Errors only, so "what broke today" is one short file.
+
+      ThresholdFilter rather than a level on the appender: the appender has to see INFO to
+      be reachable from the root logger, and the filter is what drops everything below
+      WARN once it gets here.
+    -->
+    <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/${appName}-error.log</file>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/${appName}-error.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>20MB</maxFileSize>
+            <maxHistory>180</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!--
+      Asynchronous, so a slow or full disk cannot hold up a sale being saved.
+
+      neverBlock means a full queue drops log lines rather than stalling the request
+      thread. That is the right trade for this application: losing a log line is a
+      nuisance, blocking the operator entering the day's trading is not acceptable.
+    -->
+    <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="FILE"/>
+        <queueSize>2048</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
+    <!-- Noise that is never useful and is logged at INFO by default. -->
+    <logger name="org.apache.catalina.core.StandardService" level="WARN"/>
+    <logger name="org.apache.jasper.servlet.TldScanner" level="WARN"/>
+    <logger name="org.hibernate.orm.deprecation" level="ERROR"/>
+    <!-- Prints "found no TLDs" and the full Hibernate banner on every start. -->
+    <logger name="org.hibernate.Version" level="WARN"/>
+    <logger name="org.hibernate.cfg.Environment" level="WARN"/>
+
+    <springProfile name="prod">
+        <!--
+          INFO for our own code, WARN for the frameworks. Flyway stays at INFO because a
+          migration having run is the single most important line in a deployment log.
+        -->
+        <logger name="com.app" level="INFO"/>
+        <logger name="org.springframework" level="WARN"/>
+        <logger name="org.hibernate" level="WARN"/>
+        <logger name="com.zaxxer.hikari" level="WARN"/>
+        <logger name="org.flywaydb" level="INFO"/>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="test">
+        <logger name="com.app" level="INFO"/>
+        <logger name="org.springframework" level="WARN"/>
+        <logger name="org.hibernate" level="WARN"/>
+        <logger name="org.flywaydb" level="INFO"/>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="dev">
+        <!-- Verbose on purpose: dev is where a query being wrong is worth seeing. -->
+        <logger name="com.app" level="DEBUG"/>
+        <logger name="org.springframework.web" level="DEBUG"/>
+        <logger name="org.hibernate.SQL" level="DEBUG"/>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="ASYNC_FILE"/>
+            <appender-ref ref="ERROR_FILE"/>
+        </root>
+    </springProfile>
+
+    <!--
+      No profile named. The profile guard refuses to start without ENV, so this is only
+      reached by a test slice or a tool, and console-only is right for both.
+    -->
+    <springProfile name="!prod &amp; !test &amp; !dev">
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+</configuration>

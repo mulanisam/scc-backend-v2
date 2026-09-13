@@ -29,6 +29,7 @@ import org.mockito.quality.Strictness;
 import com.app.dto.SaleLineDto;
 import com.app.dto.SalesBulkEntryDto;
 import com.app.entity.Customer;
+import com.app.exception.ResourceNotFoundException;
 import com.app.entity.Sale;
 import com.app.entity.SaleDetails;
 import com.app.repository.CustomerRepository;
@@ -161,6 +162,47 @@ class BulkEntryCreditLimitTest {
     }
 
     @Test
+    @DisplayName("an unknown customer is refused by name, not by a foreign key violation")
+    void unknownCustomerIsRefusedUpFront() {
+        // Nothing comes back for the id, which is what the repository does when the
+        // customer does not exist.
+        when(customerRepository.findAllById(anyIterable())).thenReturn(List.of());
+
+        SalesBulkEntryDto dto = entry(List.of(line(999999L, 10, "25.000", "100.0000", "0")));
+
+        ResourceNotFoundException refusal = assertThrows(ResourceNotFoundException.class,
+                () -> salesService.salesBulkEntry(dto));
+
+        // SaleMapper builds a Customer holding only the id, so without this check the
+        // insert reached MySQL and failed on the foreign key. The operator saw
+        // "Something went wrong. Quote reference affac3a6" - no customer named, nothing
+        // to act on - while the real reason sat in the log.
+        assertTrue(refusal.getMessage().contains("999999"), refusal.getMessage());
+        verify(saleRepository, never()).saveAll(anyIterable());
+        verify(ledgerService, never()).createSaleLedgerEntry(any(Sale.class));
+    }
+
+    @Test
+    @DisplayName("every unknown customer is named, not just the first one found")
+    void allUnknownCustomersAreNamed() {
+        Customer known = customer(43L, "Real trader", null);
+        when(customerRepository.findAllById(anyIterable())).thenReturn(List.of(known));
+
+        SalesBulkEntryDto dto = entry(List.of(
+                line(43L, 10, "25.000", "100.0000", "0"),
+                line(999998L, 10, "25.000", "100.0000", "0"),
+                line(999999L, 10, "25.000", "100.0000", "0")));
+
+        ResourceNotFoundException refusal = assertThrows(ResourceNotFoundException.class,
+                () -> salesService.salesBulkEntry(dto));
+
+        // Both, so a trip sheet with two bad ids is fixed in one pass rather than by
+        // resubmitting until the messages run out.
+        assertTrue(refusal.getMessage().contains("999998"), refusal.getMessage());
+        assertTrue(refusal.getMessage().contains("999999"), refusal.getMessage());
+    }
+
+    @Test
     @DisplayName("a customer with no limit set is never blocked and costs no balance lookup")
     void customersWithoutALimitPassThrough() {
         Customer walkIn = customer(43L, "Walk-in trader", null);
@@ -178,13 +220,25 @@ class BulkEntryCreditLimitTest {
     @Test
     @DisplayName("a fully paid line asks for no credit, so no limit applies")
     void fullyPaidLinesSkipTheCheckEntirely() {
+        Customer settled = customer(42L, "Settles at the door", null);
+        when(customerRepository.findAllById(anyIterable())).thenReturn(List.of(settled));
+
         SalesBulkEntryDto dto = entry(List.of(line(42L, 50, "100.000", "100.0000", "10000")));
 
         salesService.salesBulkEntry(dto);
 
-        // Nothing outstanding means no customer needed looking up at all.
-        verify(customerRepository, never()).findAllById(anyIterable());
+        /*
+         * The limit check is what is skipped, not the lookup.
+         *
+         * This used to assert findAllById was never called at all, as a proxy for "no
+         * credit was asked for". That stopped being a valid proxy once validation began
+         * checking the named customers exist - which it has to do regardless of payment,
+         * because an id that is not in the table otherwise reaches MySQL and comes back
+         * as a foreign key violation the operator sees as an opaque 500.
+         */
         verify(ledgerService, never()).isCreditLimitExceeded(any(Customer.class), any(BigDecimal.class));
+        verify(ledgerService, never()).getCurrentBalance(any(Customer.class));
+        verify(ledgerService).createSaleLedgerEntry(any(Sale.class));
     }
 
     @Test

@@ -46,3 +46,9 @@ bin/
 ### Database dumps (contain customer data; never commit) ###
 backups/
 *.sql.gz
+
+# Application logs. logback-spring.xml writes them here and rotates them; they are
+# machine-local runtime output, not source, and a 2 GB cap in the repository would be
+# a poor discovery.
+logs/
+*.log

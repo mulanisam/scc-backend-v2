@@ -30,5 +30,24 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
 	 */
 	List<Customer> findByMobileNo(String mobileNo);
 
+	/**
+	 * Everyone who can be reached on this number, on either of their two fields.
+	 *
+	 * Both columns, because a number held as somebody else's fallback still rings
+	 * their phone: a statement sent to it would carry one shop's balance to another.
+	 * Checking only mobile_no would let the second column quietly rebuild the shared
+	 * -number problem the contact screen exists to clear.
+	 */
+	@Query("SELECT c FROM Customer c WHERE c.mobileNo = :mobileNo OR c.alternateMobileNo = :mobileNo")
+	List<Customer> findByEitherMobileNo(@Param("mobileNo") String mobileNo);
+
+	/**
+	 * How many customers may be messaged on WhatsApp. Currently zero, which is the
+	 * point of showing it: the queue fills and every row skips until somebody opts
+	 * customers in, and a dashboard that did not say so would look broken instead.
+	 */
+	@Query("SELECT COUNT(c) FROM Customer c WHERE c.whatsappOptInAt IS NOT NULL AND c.whatsappOptOut = false")
+	long countWhatsappOptedIn();
+
 }
 

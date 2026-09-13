@@ -2,8 +2,13 @@ package com.app.service;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +25,8 @@ import com.app.entity.MessageOutbox;
 import com.app.entity.MessageOutbox.Channel;
 import com.app.entity.MessageOutbox.MessageType;
 import com.app.entity.MessageOutbox.Status;
+import com.app.exception.ResourceNotFoundException;
+import com.app.repository.CustomerRepository;
 import com.app.repository.MessageOutboxRepository;
 import com.app.service.Fast2SmsClient.SendResult;
 import com.app.dto.messaging.WhatsAppTemplate;
@@ -57,6 +64,12 @@ public class MessagingService {
     @Autowired
     private Fast2SmsClient fast2SmsClient;
 
+    @Autowired
+    private CustomerRepository customerRepository;
+
+    /** The provider keeps three days of WhatsApp logs, so older rows never gain one. */
+    private static final int DELIVERY_HISTORY_DAYS = 3;
+
     /**
      * Queues one message for a customer, or records why it cannot be sent.
      *
@@ -84,8 +97,29 @@ public class MessagingService {
                                  String templateId,
                                  String variables,
                                  String bodyPreview) {
+        return enqueue(customer, channel, type, referenceDate, templateId, variables, bodyPreview, null);
+    }
 
-        String key = idempotencyKey(type, channel, customer.getId(), referenceDate);
+    /**
+     * Joins the caller's transaction for the reason above: the outbox row and the sale
+     * or payment it belongs to commit together, or neither does.
+     *
+     * @param occurrence distinguishes several messages of one type on one day, where
+     *        that is legitimate - a customer can pay twice in a morning, and each
+     *        receipt is its own message. Null for the once-a-day kinds, whose whole
+     *        point is that a re-run or a back-dated entry does not message twice.
+     */
+    @Transactional
+    public MessageOutbox enqueue(Customer customer,
+                                 Channel channel,
+                                 MessageType type,
+                                 LocalDate referenceDate,
+                                 String templateId,
+                                 String variables,
+                                 String bodyPreview,
+                                 Long occurrence) {
+
+        String key = idempotencyKey(type, channel, customer.getId(), referenceDate, occurrence);
 
         // The unique constraint is the real guarantee; this check keeps the ordinary
         // repeat - a dispatch re-run, a back-dated sale for a day already messaged -
@@ -99,9 +133,19 @@ public class MessagingService {
         MessageOutbox message = new MessageOutbox();
         message.setCustomer(customer);
         message.setRecipientName(customer.getName());
-        // Snapshotted: 130 of these numbers are about to change, and the audit trail
-        // has to keep saying where the message actually went.
-        message.setRecipientMobile(MobileNumberRules.normalise(customer.getMobileNo()));
+        /*
+         * Snapshotted: 130 of these numbers are about to change, and the audit trail has
+         * to keep saying where the message actually went.
+         *
+         * messagingNumber() picks the main number, or the second one when the main is
+         * unusable - one message to one phone, never both. Sending a statement twice
+         * would double the exposure of a balance and the provider cost for no benefit.
+         * Null here means neither number works, and refuse() below is what reports it;
+         * the column is not-null, so a placeholder keeps the row insertable and the
+         * skip reason explains it.
+         */
+        String recipient = customer.messagingNumber();
+        message.setRecipientMobile(recipient == null ? "" : recipient);
         message.setChannel(channel);
         message.setMessageType(type);
         message.setIdempotencyKey(key);
@@ -137,8 +181,16 @@ public class MessagingService {
      * somebody who never asked for it.
      */
     private String refuse(Customer customer, Channel channel, MessageType type, String templateId) {
-        MobileNumberRules.Status numberStatus = MobileNumberRules.classify(customer.getMobileNo());
-        if (numberStatus != MobileNumberRules.Status.VALID) {
+        /*
+         * Either number will do, and the same choice the send path makes.
+         *
+         * Judging the main number alone would skip a customer whose main number is
+         * blank but whose second one is fine - exactly the case the second column was
+         * added for. The reason given names the main number's problem, because that is
+         * still the field somebody should eventually fix.
+         */
+        if (customer.messagingNumber() == null) {
+            MobileNumberRules.Status numberStatus = MobileNumberRules.classify(customer.getMobileNo());
             return MobileNumberRules.describe(numberStatus);
         }
         if (channel == Channel.WHATSAPP) {
@@ -176,8 +228,19 @@ public class MessagingService {
      * the first and never queued.
      */
     public static String idempotencyKey(MessageType type, Channel channel, Long partyId, LocalDate referenceDate) {
+        return idempotencyKey(type, channel, partyId, referenceDate, null);
+    }
+
+    /**
+     * @param occurrence appended when several of one type on one day are legitimate -
+     *        the payment id on a receipt, so two payments in a morning send two
+     *        receipts instead of the second being taken for a duplicate of the first.
+     */
+    public static String idempotencyKey(MessageType type, Channel channel, Long partyId,
+                                       LocalDate referenceDate, Long occurrence) {
         return type.name() + ":" + channel.name() + ":" + partyId
-                + ":" + (referenceDate == null ? "all" : referenceDate);
+                + ":" + (referenceDate == null ? "all" : referenceDate)
+                + (occurrence == null ? "" : ":" + occurrence);
     }
 
     /** The channel used when a caller does not name one, such as a test send. */
@@ -363,6 +426,247 @@ public class MessagingService {
         return outboxRepository.save(saved);
     }
 
+    // ---- delivery status --------------------------------------------------
+
+    /**
+     * Asks the provider what became of messages it accepted.
+     *
+     * Accepted is not delivered. Without this, the dashboard could only ever say "we
+     * handed it over", which is the kind of half-truth that has somebody assuring a
+     * customer they were told about a balance they never saw.
+     *
+     * WhatsApp is fetched as a date range because its log cannot be filtered by
+     * request id; SMS is fetched one report at a time because that is the only shape
+     * offered. Both are matched on provider_message_id.
+     *
+     * Runs every ten minutes. The provider keeps three days of WhatsApp history, so
+     * anything older than that is left alone - it will never gain a status now.
+     */
+    @Scheduled(fixedDelayString = "${messaging.delivery-poll-interval-ms:600000}",
+               initialDelayString = "${messaging.delivery-poll-initial-delay-ms:90000}")
+    public void syncDeliveryScheduled() {
+        try {
+            syncDeliveryStatus();
+        } catch (RuntimeException e) {
+            logger.error("Delivery status sync failed", e);
+        }
+    }
+
+    /**
+     * @return how many rows gained a delivery outcome
+     */
+    public int syncDeliveryStatus() {
+        LocalDate from = LocalDate.now().minusDays(DELIVERY_HISTORY_DAYS);
+        List<MessageOutbox> awaiting = outboxRepository.findAwaitingDelivery(
+                Status.SENT, from.atStartOfDay());
+
+        if (awaiting.isEmpty()) {
+            return 0;
+        }
+
+        int updated = 0;
+
+        // One call covers every WhatsApp message in the window.
+        boolean anyWhatsapp = awaiting.stream().anyMatch(m -> m.getChannel() == Channel.WHATSAPP);
+        Map<String, Fast2SmsClient.DeliveryReport> whatsappReports = new HashMap<>();
+        if (anyWhatsapp) {
+            for (Fast2SmsClient.DeliveryReport report :
+                    fast2SmsClient.fetchWhatsappDelivery(from, LocalDate.now())) {
+                if (report.requestId() != null) {
+                    whatsappReports.put(report.requestId(), report);
+                }
+            }
+        }
+
+        for (MessageOutbox message : awaiting) {
+            Fast2SmsClient.DeliveryReport report = message.getChannel() == Channel.WHATSAPP
+                    ? whatsappReports.get(message.getProviderMessageId())
+                    : fast2SmsClient.fetchSmsDelivery(message.getProviderMessageId()).orElse(null);
+
+            if (report == null) {
+                // No report yet. Stamp the check so the next pass can prefer rows
+                // that have waited longest.
+                message.setStatusCheckedAt(LocalDateTime.now());
+                outboxRepository.save(message);
+                continue;
+            }
+
+            Status before = message.getStatus();
+            message.applyDeliveryStatus(report.status(), parseTimestamp(report.timestamp()));
+            outboxRepository.save(message);
+            if (message.getStatus() != before) {
+                updated++;
+            }
+        }
+
+        logger.info("Delivery sync: {} of {} message(s) gained an outcome", updated, awaiting.size());
+        return updated;
+    }
+
+    /**
+     * The provider's timestamps arrive in more than one shape, and an unparseable one
+     * is not worth failing a sync over - the row still gets its status, dated now.
+     */
+    private LocalDateTime parseTimestamp(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String trimmed = value.trim();
+        try {
+            // Epoch seconds, which is what the WhatsApp Cloud API uses.
+            if (trimmed.matches("\\d{10}")) {
+                return LocalDateTime.ofInstant(
+                        java.time.Instant.ofEpochSecond(Long.parseLong(trimmed)), ZoneId.systemDefault());
+            }
+            if (trimmed.matches("\\d{13}")) {
+                return LocalDateTime.ofInstant(
+                        java.time.Instant.ofEpochMilli(Long.parseLong(trimmed)), ZoneId.systemDefault());
+            }
+            return LocalDateTime.parse(trimmed.replace(' ', 'T'));
+        } catch (RuntimeException e) {
+            logger.debug("Unrecognised delivery timestamp \"{}\"", trimmed);
+            return null;
+        }
+    }
+
+    // ---- resend and ad-hoc sends ------------------------------------------
+
+    /**
+     * Sends a failed message again, as a new row.
+     *
+     * A new row rather than resetting the old one, so the record keeps both the
+     * failure and the retry. Overwriting the original would erase the evidence that
+     * anything went wrong - which is the whole reason the outbox exists.
+     *
+     * The idempotency key carries a resend counter, so the original key stays intact
+     * and a second resend is still possible.
+     */
+    @Transactional
+    public MessageOutbox resend(Long outboxId) {
+        MessageOutbox original = outboxRepository.findById(outboxId)
+                .orElseThrow(() -> new ResourceNotFoundException("Message " + outboxId + " was not found."));
+
+        if (original.getStatus() == Status.DELIVERED || original.getStatus() == Status.READ) {
+            throw new IllegalStateException("Message " + outboxId
+                    + " was already delivered; there is nothing to resend.");
+        }
+
+        long attempt = outboxRepository.countByIdempotencyKeyStartingWith(
+                original.getIdempotencyKey() + ":resend") + 1;
+
+        MessageOutbox retry = new MessageOutbox();
+        retry.setCustomer(original.getCustomer());
+        retry.setRecipientName(original.getRecipientName());
+        retry.setRecipientMobile(original.getRecipientMobile());
+        retry.setChannel(original.getChannel());
+        retry.setMessageType(original.getMessageType());
+        retry.setIdempotencyKey(original.getIdempotencyKey() + ":resend" + attempt);
+        retry.setReferenceDate(original.getReferenceDate());
+        retry.setTemplateId(original.getTemplateId());
+        retry.setVariables(original.getVariables());
+        retry.setBodyPreview(original.getBodyPreview());
+
+        // Checked again: the number may have been corrected, or consent withdrawn,
+        // since the original attempt.
+        if (original.getCustomer() != null) {
+            String refusal = refuse(original.getCustomer(), original.getChannel(),
+                    original.getMessageType(), original.getTemplateId());
+            if (refusal != null) {
+                retry.markSkipped(refusal);
+            }
+        }
+
+        MessageOutbox saved = outboxRepository.save(retry);
+        logger.info("Queued a resend of message {} as {}", outboxId, saved.getId());
+
+        // Sent immediately rather than waiting for the schedule: a resend is somebody
+        // watching the screen, and its whole point is to see the outcome now.
+        if (saved.getStatus() == Status.PENDING && properties.isEnabled()) {
+            sendOne(saved);
+        }
+        return saved;
+    }
+
+    /**
+     * Sends an approved template to any number, with values supplied by hand.
+     *
+     * For the cases the automatic path does not cover - telling one customer about a
+     * sale entered late, chasing a balance, or checking the provider after a
+     * configuration change. It is not free text: WhatsApp only carries approved
+     * templates outside a 24-hour reply window, so the caller picks a template and
+     * fills its variables, and the variable count is checked against the provider's
+     * own before anything is sent.
+     *
+     * Recorded in the outbox like every other message. An ad-hoc send that left no
+     * trace would be the one message nobody could account for.
+     */
+    @Transactional
+    public MessageOutbox sendCustomMessage(String mobileNo,
+                                           String recipientName,
+                                           Channel channel,
+                                           String templateId,
+                                           List<String> values,
+                                           Long customerId) {
+
+        MobileNumberRules.Status numberStatus = MobileNumberRules.classify(mobileNo);
+        if (numberStatus != MobileNumberRules.Status.VALID) {
+            throw new IllegalArgumentException("\"" + mobileNo + "\" cannot be used: "
+                    + MobileNumberRules.describe(numberStatus) + ".");
+        }
+        if (!properties.getFast2sms().isConfigured()) {
+            throw new IllegalStateException("Fast2SMS is not configured. Set FAST2SMS_API_KEY in .env.");
+        }
+        if (values == null || values.isEmpty()) {
+            throw new IllegalArgumentException("The template's values are required.");
+        }
+
+        Channel resolvedChannel = channel == null ? properties.getChannel() : channel;
+        String resolvedTemplate = templateId != null && !templateId.isBlank()
+                ? templateId
+                : resolveTemplateId(resolvedChannel, MessageType.DAILY_SALE_SUMMARY, null);
+
+        // A pipe inside a value would shift every later one into the wrong slot.
+        String variables = values.stream()
+                .map(value -> value == null ? "" : value.replace("|", " ").trim())
+                .collect(Collectors.joining("|"));
+
+        MessageOutbox message = new MessageOutbox();
+        message.setRecipientName(recipientName == null || recipientName.isBlank() ? "Manual" : recipientName.trim());
+        message.setRecipientMobile(MobileNumberRules.normalise(mobileNo));
+        message.setChannel(resolvedChannel);
+        message.setMessageType(MessageType.DAILY_SALE_SUMMARY);
+        message.setTemplateId(resolvedTemplate);
+        message.setVariables(variables);
+        message.setReferenceDate(LocalDate.now());
+        // Timestamped, because an ad-hoc send is deliberately repeatable - the same
+        // person may need telling twice.
+        message.setIdempotencyKey("MANUAL:" + MobileNumberRules.normalise(mobileNo)
+                + ":" + System.currentTimeMillis());
+
+        if (customerId != null) {
+            customerRepository.findById(customerId).ifPresent(message::setCustomer);
+        }
+
+        String refusal = checkAgainstTemplate(message);
+        if (refusal != null) {
+            // Not saved as skipped: this is somebody at a screen who needs telling
+            // what is wrong so they can correct it and try again.
+            throw new IllegalArgumentException(refusal);
+        }
+
+        MessageOutbox saved = outboxRepository.save(message);
+        logger.warn("Manual {} send to {} using template {}",
+                resolvedChannel, saved.getRecipientMobile(), resolvedTemplate);
+
+        SendResult result = fast2SmsClient.send(saved);
+        if (result.accepted()) {
+            saved.markSent(result.messageId(), result.response());
+        } else {
+            saved.markFailed(result.error() + (result.response() == null ? "" : " | " + result.response()));
+        }
+        return outboxRepository.save(saved);
+    }
+
     // ---- dispatch ---------------------------------------------------------
 
     /**
@@ -425,6 +729,21 @@ public class MessagingService {
         if (current == null || current.getStatus() == Status.SENT
                 || current.getStatus() == Status.SKIPPED
                 || current.getStatus() == Status.CANCELLED) {
+            return false;
+        }
+
+        /*
+         * A statement carries a PDF, and this path cannot attach one.
+         *
+         * fast2SmsClient.send posts to the plain template endpoint, which has no media
+         * parameter - so a statement sent from here would arrive as a message saying the
+         * statement is attached, with nothing attached. Left queued for
+         * WeeklyStatementJob, which uploads the document first. findDispatchable already
+         * excludes these; this is the guard for the other way in, a resend by id.
+         */
+        if (current.getMessageType() == MessageType.WEEKLY_STATEMENT) {
+            logger.debug("Message {} is a statement and is left for the statement dispatcher",
+                    current.getId());
             return false;
         }
 

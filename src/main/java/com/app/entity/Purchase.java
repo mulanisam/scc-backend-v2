@@ -54,7 +54,17 @@ public class Purchase extends AuditableEntity {
     @JoinColumn(name = "supplier_id")
     private Supplier supplier;
 
-    @OneToMany(mappedBy = "purchase", cascade = CascadeType.ALL, orphanRemoval = true)
+    /**
+     * The DC lines this purchase was made up of.
+     *
+     * EAGER deliberately. @OneToMany is lazy by default, and a purchase is always read with
+     * its lines - GET /user/purchases/{id} returns them - so with
+     * spring.jpa.open-in-view now off Jackson would reach an uninitialised collection after
+     * the session had closed and fail the request. There are nine purchases in this
+     * database and a handful of lines each, so eager costs nothing measurable.
+     */
+    @OneToMany(mappedBy = "purchase", cascade = CascadeType.ALL, orphanRemoval = true,
+               fetch = FetchType.EAGER)
     private List<DcDetail> dcDetails = new ArrayList<>();
 }
 

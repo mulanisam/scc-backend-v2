@@ -8,7 +8,6 @@ import com.app.entity.City;
 import com.app.entity.Customer;
 import com.app.entity.Driver;
 import com.app.entity.Party;
-import com.app.entity.PartyVehicle;
 import com.app.entity.Route;
 import com.app.entity.Supplier;
 import com.app.entity.Vehicle;
@@ -58,11 +57,4 @@ public interface MasterDataService {
     Party updateParty(Long id, Party partyDetails);
     void deleteParty(Long id);
 
-    // PartyVehicle methods
-    List<PartyVehicle> getAllPartyVehicles();
-    PartyVehicle createPartyVehicle(PartyVehicle partyVehicle);
-    PartyVehicle getPartyVehicleById(Long id);
-    PartyVehicle updatePartyVehicle(Long id, PartyVehicle partyVehicleDetails);
-    void deletePartyVehicle(Long id);
-    List<PartyVehicle> getPartyVehicleByPartyId(Long id);
 }

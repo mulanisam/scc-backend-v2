@@ -132,6 +132,24 @@
 			<artifactId>flyway-mysql</artifactId>
 		</dependency>
 
+		<!--
+			Statement PDFs, rendered on the server.
+
+			The statement was drawn in the browser with jsPDF, which meant the weekly
+			WhatsApp statement had no way to produce one - a scheduled job has no
+			browser. Generating it here gives both the Download button and the job the
+			same document from the same code.
+
+			PDFBox rather than OpenPDF: Apache 2.0, and its Helvetica is WinAnsi-encoded
+			exactly as jsPDF's was, so the "Rs." convention the layout already uses
+			carries over unchanged instead of silently dropping the rupee glyph.
+		-->
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>2.0.27</version>
+		</dependency>
+
 	</dependencies>
 
 	<build>

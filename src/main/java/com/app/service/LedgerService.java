@@ -9,6 +9,7 @@ import com.app.dto.CustomerStatementDTO;
 import com.app.entity.Customer;
 import com.app.entity.CustomerLedger;
 import com.app.entity.Sale;
+import com.app.entity.TradingEntry;
 import com.app.entity.CustomerPayment;
 
 public interface LedgerService {
@@ -17,6 +18,20 @@ public interface LedgerService {
      * Create ledger entry for a sale
      */
     CustomerLedger createSaleLedgerEntry(Sale sale);
+
+    /**
+     * Posts a wholesale trading entry to the party's ledger account.
+     *
+     * The same debit-and-credit as a sale, and deliberately the same TransactionType, so
+     * one statement reads the retail and wholesale history of an account without a reader
+     * having to know which subsystem recorded a line. What differs is reference_type -
+     * TRADING_ENTRY - which is how the statement knows where to find the birds and weight.
+     *
+     * Trading entries did not post to the ledger at all before. That was survivable while
+     * the table was empty; it stopped being survivable when route 9's 44 lakh moved here,
+     * because a new entry would have left the balance where it was.
+     */
+    CustomerLedger createTradingLedgerEntry(TradingEntry entry);
     
     /**
      * Create ledger entry for a payment

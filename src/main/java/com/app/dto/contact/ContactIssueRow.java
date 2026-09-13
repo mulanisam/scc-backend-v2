@@ -23,6 +23,16 @@ public class ContactIssueRow {
 
     /** As recorded, unchanged, so an operator sees exactly what is stored. */
     private String mobileNo;
+    /** The second number for the same shop, if one is recorded. */
+    private String alternateMobileNo;
+    /**
+     * True when the main number is unusable and messages fall back to the second one.
+     *
+     * Shown on the row because the customer is reachable but the record is still wrong:
+     * somebody should eventually correct the main number rather than leave the fallback
+     * carrying it.
+     */
+    private boolean usingAlternate;
     /** MISSING, TOO_SHORT, BAD_PREFIX, PLACEHOLDER, SHARED, ... */
     private String status;
     private String reason;

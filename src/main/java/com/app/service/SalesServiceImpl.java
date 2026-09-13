@@ -4,9 +4,12 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.app.config.MessagingProperties;
 import com.app.dto.SaleLineDto;
 import com.app.dto.SaleMapper;
 import com.app.dto.SalesBulkEntryDto;
@@ -57,6 +61,10 @@ public class SalesServiceImpl implements SalesService {
     
     @Autowired
     private MessagingService messagingService;
+
+    /** Read only to choose the daily WhatsApp wording - rate included or not. */
+    @Autowired
+    private MessagingProperties messagingProperties;
     
     @Autowired
     private LedgerService ledgerService;
@@ -125,6 +133,50 @@ public class SalesServiceImpl implements SalesService {
             throw new IllegalArgumentException(String.format(
                     "Bird count does not balance: %d loaded but %d accounted for (%s).",
                     birds.getTotalBirds(), birds.getAccountedFor(), birds.getMessage()));
+        }
+
+        /*
+         * Every named customer has to exist.
+         *
+         * SaleMapper builds a Customer holding nothing but the id, so an id that is not
+         * in the table survives every check above and is only caught by MySQL, as a
+         * foreign key violation on the insert. The operator then got a 500 reading
+         * "Something went wrong. Quote reference affac3a6" - no mention of a customer,
+         * nothing to act on - while the real answer, that the id does not exist, was
+         * sitting in the log.
+         *
+         * One batched query, and only over the distinct ids.
+         */
+        Set<Long> customerIds = lines.stream()
+                .map(SaleLineDto::getCustomerId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        List<Customer> named = customerRepository.findAllById(customerIds);
+        Set<Long> found = named.stream().map(Customer::getId).collect(Collectors.toSet());
+
+        List<Long> missing = customerIds.stream().filter(id -> !found.contains(id)).toList();
+        if (!missing.isEmpty()) {
+            throw new ResourceNotFoundException(missing.size() == 1
+                    ? "Customer " + missing.get(0) + " was not found."
+                    : "These customers were not found: " + missing + ".");
+        }
+
+        /*
+         * A wholesale party does not belong on a route trip sheet.
+         *
+         * The eleven parties moved to Trading are still customer records, because the
+         * ledger needs them to be - so nothing but this stops one being picked on the bulk
+         * screen and its sale landing back in the retail table the business was moved out
+         * of, which is how route 9 came to exist in the first place.
+         */
+        List<String> tradingParties = named.stream()
+                .filter(Customer::isTrading)
+                .map(Customer::getName)
+                .toList();
+        if (!tradingParties.isEmpty()) {
+            throw new IllegalStateException(
+                    "These are trading parties and are recorded on the Trading screen, not on a route: "
+                            + String.join(", ", tradingParties) + ".");
         }
     }
 
@@ -237,8 +289,16 @@ public class SalesServiceImpl implements SalesService {
                 }
 
                 if (sendWhatsapp) {
-                    SmsMessageBuilder.Message whatsapp = SmsMessageBuilder.dailySaleSummary(
-                            customer.getName(), date, birds, kilograms, amount, paid, balance);
+                    // Seven variables or eight, depending on whether the rate is
+                    // included - two different approved templates. The property and
+                    // the configured template id have to agree; the queue checks the
+                    // count against the provider before anything goes out.
+                    SmsMessageBuilder.Message whatsapp =
+                            messagingProperties.getFast2sms().isWhatsappDailyIncludesRate()
+                                    ? SmsMessageBuilder.dailySaleSummary(
+                                            customer.getName(), date, birds, kilograms, amount, paid, balance)
+                                    : SmsMessageBuilder.dailySaleSummaryNoRate(
+                                            customer.getName(), date, birds, kilograms, amount, paid, balance);
                     messagingService.enqueue(customer, Channel.WHATSAPP, MessageType.DAILY_SALE_SUMMARY,
                             date, null, whatsapp.variables(), whatsapp.body());
                 }
@@ -257,7 +317,6 @@ public class SalesServiceImpl implements SalesService {
     @Transactional
     @Override
     public List<Sale> salesBulkEntry(SalesBulkEntryDto salesBulkEntryDto) {
-        logger.info("Entering salesBulkEntry method with parameters: {}", salesBulkEntryDto);
 
         // Validated outside the try below, which wraps everything in a plain
         // RuntimeException and would otherwise turn these rejections into a 500
@@ -342,8 +401,25 @@ public class SalesServiceImpl implements SalesService {
     @Transactional
     @Override
     public Sale createSingleSale(SingleSaleEntryDTO saleDTO) {
-        logger.info("Creating single sale entry: {}", saleDTO);
+        logger.debug("Creating single sale for customer {} on {}", saleDTO.getCustomerId(), saleDTO.getDate());
         
+        /*
+         * The same date rules bulk entry enforces, and outside the try for the same reason:
+         * that catch turns anything it sees into a plain RuntimeException, so a rejection
+         * raised inside it reaches the operator as a 500 with no usable message.
+         *
+         * A single sale had neither check. It is the same API, reachable the same way, and
+         * a sale cannot be recorded before it happens - there are already two future-dated
+         * sales in this data from before bulk entry started refusing them.
+         */
+        if (saleDTO.getDate() == null) {
+            throw new IllegalArgumentException("A sale must have a date.");
+        }
+        if (saleDTO.getDate().isAfter(LocalDate.now())) {
+            throw new IllegalArgumentException("Sale date " + saleDTO.getDate()
+                    + " is in the future. Future-dated sales cannot be saved.");
+        }
+
         try {
             // Validate and fetch entities
             Customer customer = customerRepository.findById(saleDTO.getCustomerId())
@@ -371,9 +447,34 @@ public class SalesServiceImpl implements SalesService {
             BigDecimal paymentAmount = MoneyRules.money(saleDTO.getPayment());
             BigDecimal pendingAmount = MoneyRules.calculatePending(saleAmount, paymentAmount);
 
+            /*
+             * IllegalStateException, not RuntimeException.
+             *
+             * The catch below rethrows this type, so the operator is told which customer is
+             * over and by how much. As a plain RuntimeException it was caught and reissued
+             * as "Failed to create sale" - a 500 with the reason only in the log, which is
+             * the exact defect already fixed on the bulk path.
+             */
             if (customer.isCreditLimitEnabled() && ledgerService.isCreditLimitExceeded(customer, pendingAmount)) {
-                throw new RuntimeException("Credit limit exceeded for customer: " + customer.getName() + 
-                        ". Current limit: " + customer.getCreditLimit());
+                throw new IllegalStateException(String.format(
+                        "%s has reached their credit limit: balance %s plus %s on this sale exceeds the limit of %s.",
+                        customer.getName(),
+                        ledgerService.getCurrentBalance(customer).toPlainString(),
+                        pendingAmount.toPlainString(),
+                        MoneyRules.money(customer.getCreditLimit()).toPlainString()));
+            }
+
+            /*
+             * A wholesale party is not sold to through the retail screen.
+             *
+             * Route 9's eleven parties are still customers - the ledger needs them to be -
+             * so without this they would keep appearing in the single-sale customer picker,
+             * and a sale entered there would land back in the retail sale table that this
+             * business was just moved out of.
+             */
+            if (customer.isTrading()) {
+                throw new IllegalStateException(customer.getName()
+                        + " is a trading party. Record this on the Trading screen, not as a route sale.");
             }
             
             // Create Sale entity
@@ -406,11 +507,11 @@ public class SalesServiceImpl implements SalesService {
             // Same path as bulk entry: one message per customer for the day, per
             // requested channel, queued rather than sent.
             queueDailyMessages(List.of(savedSale), saleDTO.getDate(),
-                    saleDTO.isSendSms(), saleDTO.isSendWAmsg());
+                    saleDTO.isSendSms(), saleDTO.isSendWhatsapp());
 
             return savedSale;
             
-        } catch (IllegalArgumentException | ResourceNotFoundException e) {
+        } catch (IllegalArgumentException | IllegalStateException | ResourceNotFoundException e) {
             // Business rejections keep their type so they surface as 400 with
             // the message, not as an opaque 500.
             throw e;
@@ -422,7 +523,6 @@ public class SalesServiceImpl implements SalesService {
 
 	@Override
 	public SaleDetails saveSaleDetails(SaleDetails saleDetails) {
-		logger.info("Entering saveSaleDetails method with parameters: {}", saleDetails);
 		 try {
 
 			 Optional<SaleDetails> existingSaleDetails = saleDetailsRepository.findByDateAndRouteAndVehicleAndDriver(saleDetails.getDate(), saleDetails.getRoute(), saleDetails.getVehicle(), saleDetails.getDriver());
