@@ -90,6 +90,38 @@ mysql -u root -p -e "CREATE DATABASE scc_migration_check;"
 mysql -u root -p scc_migration_check < ~/scc-migration-backup/pre-v2-*.sql
 ```
 
+**Then, before Step 3, run this too - do not skip it:**
+
+```bash
+mysql -u root -p scc_migration_check < src/main/resources/db/restore/upgrade_pre_ledger_dump_to_v1.sql
+```
+
+A dump of a database that has never been through this app's own Flyway history is
+missing things V1's baseline assumes already exist - not because V1 is wrong, but
+because V1 is one specific environment's schema, captured at one point in time, and
+`baseline-on-migrate` marks *any* existing database "already at V1" without checking
+that the two actually agree. This script closes exactly that gap: two tables
+(`customer_ledger`, `customer_payment`, and on some databases a third, `payment_entries`,
+kept only because a later migration's own `ALTER TABLE` needs it to exist) and a handful
+of columns on `customer` and `trading_entries` that were added to this project's own
+schema before some real deployment ever caught up to them independently.
+
+This was already written and already in this repo (`db/restore/`) when the Mac
+migration first ran - written earlier, for an earlier dump, and simply not
+cross-referenced here. Not knowing it existed cost real time twice: once on the Mac,
+which reinvented the same fix from scratch as a Flyway migration (`V1_1`, never
+committed), and once here, reinventing it a second time with a bug the first
+reinvention didn't have (a `customer_payment` shape copied from an *already-migrated*
+database, which made `V3` fail two versions later on a duplicate column). Both attempts
+converged on discovering exactly the tables and columns this script already names -
+worth trusting it outright rather than re-deriving it, if this ever comes up a third time.
+
+Skip this only if `SHOW TABLES LIKE 'customer_ledger'` on the *scratch copy* already
+returns a row - a database that has been through this project's own migration history
+before (however that happened) needs none of this, and running it anyway is harmless
+(it fails loudly on `customer_ledger` already existing rather than silently doing
+nothing) but is one step you don't need.
+
 ## Step 3 - dry run: point the v2 app at the scratch copy
 
 `DATASOURCE_URL` on the command line overrides whatever `.env` says for this
